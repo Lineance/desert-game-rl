@@ -12,6 +12,11 @@
 
 ```text
 task2/
+├── scripts/
+│   ├── train.py       # 训练入口脚本
+│   ├── evaluate.py    # 评估入口脚本
+│   ├── benchmark.py   # 基准评测入口脚本
+│   └── validator.py   # 结果校验入口脚本
 ├── src/
 │   ├── env/
 │   │   ├── config.py      # 关卡参数与RL超参数
@@ -21,9 +26,9 @@ task2/
 │   │   ├── agent.py       # MLP + Belief 编码策略/价值网络
 │   │   └── ppo.py         # 唯一PPO训练实现（采样+更新）
 │   └── pipeline/
-│       ├── train.py       # 训练入口
-│       ├── evaluate.py    # 评估与结果导出
-│       ├── benchmark.py   # 基准评测
+│       ├── train.py       # 训练核心逻辑
+│       ├── evaluate.py    # 评估与导出核心逻辑
+│       ├── benchmark.py   # 基准评测核心逻辑
 │       ├── oracle_optimal.py
 │       └── validator.py
 ├── ARCHITECTURE.md    # 架构说明（与代码一致）
@@ -58,19 +63,33 @@ task2/
 
 ---
 
+## 环境准备（uv）
+
+```bash
+# 安装并同步依赖（推荐）
+uv sync
+
+# 含开发依赖（pytest 等）
+uv sync --group dev
+```
+
+> 项目已在 `pyproject.toml` 中配置：默认清华源 + `torch` 使用 `cu128` 源。
+
+---
+
 ## 训练
 
 ### 命令
 
 ```bash
 # 第三问
-python src/pipeline/train.py --level 3 --episodes 2000
+uv run python scripts/train.py --level 3 --episodes 2000
 
 # 第四问
-python src/pipeline/train.py --level 4 --episodes 5000
+uv run python scripts/train.py --level 4 --episodes 5000
 
 # 指定设备
-python src/pipeline/train.py --level 3 --episodes 2000 --device cuda
+uv run python scripts/train.py --level 3 --episodes 2000 --device cuda
 ```
 
 ### 参数
@@ -94,19 +113,19 @@ python src/pipeline/train.py --level 3 --episodes 2000 --device cuda
 ### 单轮评估
 
 ```bash
-python src/pipeline/evaluate.py ./artifacts/checkpoints/level3_best.pt --level 3 --verbose
+uv run python scripts/evaluate.py ./artifacts/checkpoints/level3_best.pt --level 3 --verbose
 ```
 
 ### 多轮统计
 
 ```bash
-python src/pipeline/evaluate.py ./artifacts/checkpoints/level3_best.pt --level 3 --runs 100
+uv run python scripts/evaluate.py ./artifacts/checkpoints/level3_best.pt --level 3 --runs 100
 ```
 
 ### 导出结果
 
 ```bash
-python src/pipeline/evaluate.py ./artifacts/checkpoints/level3_best.pt --level 3 --output ./artifacts/results
+uv run python scripts/evaluate.py ./artifacts/checkpoints/level3_best.pt --level 3 --output ./artifacts/results
 ```
 
 导出表记录的是**当日动作执行后**状态，符合题目注2口径；动作列优先使用环境实际执行动作（而非策略意图动作）。
@@ -117,21 +136,21 @@ python src/pipeline/evaluate.py ./artifacts/checkpoints/level3_best.pt --level 3
 
 ```bash
 # 基础评测（每个天气模式100轮）
-python src/pipeline/benchmark.py ./artifacts/checkpoints/level3_best.pt --level 3 --runs 100
+uv run python scripts/benchmark.py ./artifacts/checkpoints/level3_best.pt --level 3 --runs 100
 
 # 带随机策略基线对照
-python src/pipeline/benchmark.py ./artifacts/checkpoints/level3_best.pt --level 3 --runs 100 --with-random-baseline
+uv run python scripts/benchmark.py ./artifacts/checkpoints/level3_best.pt --level 3 --runs 100 --with-random-baseline
 
 # 指定天气模式并保存JSON
-python src/pipeline/benchmark.py ./artifacts/checkpoints/level3_best.pt --level 3 \
+uv run python scripts/benchmark.py ./artifacts/checkpoints/level3_best.pt --level 3 \
   --weather-modes no_sandstorm,sunny_bias,hot_bias \
   --output-json ./artifacts/results/benchmark_level3.json
 
 # 设定最低成功率门槛（可用于自动回归）
-python src/pipeline/benchmark.py ./artifacts/checkpoints/level3_best.pt --level 3 --runs 100 --min-success-rate 0.3
+uv run python scripts/benchmark.py ./artifacts/checkpoints/level3_best.pt --level 3 --runs 100 --min-success-rate 0.3
 
 # 加入数学规划Oracle上界（建议runs先设小一些）
-python src/pipeline/benchmark.py ./artifacts/checkpoints/level3_best.pt --level 3 --runs 20 --with-oracle --oracle-time-limit 30
+uv run python scripts/benchmark.py ./artifacts/checkpoints/level3_best.pt --level 3 --runs 20 --with-oracle --oracle-time-limit 30
 ```
 
 输出指标：
@@ -151,14 +170,14 @@ python src/pipeline/benchmark.py ./artifacts/checkpoints/level3_best.pt --level 
 
 ### 结果验证（task2内置）
 
-可直接使用 `src/pipeline/validator.py` 对导出结果做规则一致性检查：
+可直接使用 `scripts/validator.py` 对导出结果做规则一致性检查：
 
 ```bash
 # 验证第三关结果
-python src/pipeline/validator.py ./artifacts/results/level3_result.xlsx --level 3
+uv run python scripts/validator.py ./artifacts/results/level3_result.xlsx --level 3
 
 # 验证第四关结果
-python src/pipeline/validator.py ./artifacts/results/level4_result.xlsx --level 4
+uv run python scripts/validator.py ./artifacts/results/level4_result.xlsx --level 4
 ```
 
 验证器会检查：
@@ -195,7 +214,14 @@ print(info["money"], info["reached"])
 ## 依赖
 
 ```bash
-pip install torch numpy openpyxl
+# 推荐
+uv sync
+
+# 若需要开发依赖
+uv sync --group dev
+
+# 仅在不使用 uv 时
+pip install torch numpy openpyxl pandas pulp highspy
 ```
 
 ---
