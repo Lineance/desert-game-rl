@@ -1,0 +1,44 @@
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+
+# Test and tooling cache
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Build artifacts
+dist/
+build/
+*.egg-info/
+
+# IDE/editor
+.vscode/
+.idea/
+.opencode/
+.claude/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Project runtime artifacts
+artifacts/checkpoints/
+artifacts/logs/
+artifacts/results/
+
+# Legacy runtime dirs (for compatibility during migration)
+checkpoints/
+logs/
+results/
+
+# Local datasets or exports
+*.xlsx
+*.csv
