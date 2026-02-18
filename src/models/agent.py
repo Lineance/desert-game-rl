@@ -1,5 +1,5 @@
 """
-简化版智能体 - 修复所有关键BUG
+智能体
 """
 from os import PathLike
 from typing import Dict, Optional, Tuple, Union
@@ -8,6 +8,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
 from src.env.config import RLConfig
 from src.models.belief import extract_belief_features
 
@@ -316,4 +317,5 @@ def create_agent(env, config: Optional[RLConfig] = None, device: str = 'cpu'):
     obs_dim = 19  # 与environment一致: 6状态+3天气+4地点+6信念
     agent = HybridRNNAgent(obs_dim=obs_dim, num_locations=env.config.NUM_NODES, config=config)
     agent.to(device)
+    return agent
     return agent

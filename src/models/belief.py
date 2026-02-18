@@ -3,9 +3,10 @@
 基于历史观测显式建模天气转移概率
 """
 
-import numpy as np
-from typing import List, Optional
 from dataclasses import dataclass
+from typing import List, Optional
+
+import numpy as np
 
 from src.env.config import Weather
 
@@ -289,4 +290,5 @@ def extract_belief_features(belief_model: WeatherBeliefModel) -> np.ndarray:
         belief.confidence,
         normalized_entropy,
         mode / 2.0  # 归一化到[0,1]
+    ])
     ])

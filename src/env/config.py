@@ -124,26 +124,20 @@ class RLConfig:
     # PPO参数
     GAMMA = 0.99            # 折扣因子
     GAE_LAMBDA = 0.95       # GAE参数
-    CLIP_EPS = 0.2          # PPO裁剪参数
-    LR_ACTOR = 3e-4         # Actor学习率
-    LR_CRITIC = 1e-3        # Critic学习率
+    CLIP_EPS = 0.2          # PPO裁剪参数（收紧，抑制策略突变）
+    LR_ACTOR = 1e-4         # Actor学习率
+    LR_CRITIC = 2e-4        # Critic学习率（降低以稳定价值拟合）
+    TARGET_KL = 0.02        # 新增：KL早停阈值
     
     # 训练参数
     NUM_EPISODES = 5000     # 总训练回合数
     BATCH_SIZE = 64         # 批次大小
-    EPOCHS_PER_UPDATE = 10  # 每次更新迭代次数
+    EPOCHS_PER_UPDATE = 5   # 每次更新迭代次数（减少过拟合与发散）
     MAX_GRAD_NORM = 0.5     # 梯度裁剪
     
     # 探索参数（修复探索崩溃）
     ENTROPY_COEF = 0.1      # 提高熵系数（0.01→0.1），强制探索
     MIN_ENTROPY = 0.5       # 新增：熵下限，防止归零
-    
-    # 学习率（降低Actor学习率，稳定训练）
-    LR_ACTOR = 1e-4         # 原3e-4
-    LR_CRITIC = 5e-4        # 原1e-3
-    
-    # PPO裁剪（放宽限制）
-    CLIP_EPS = 0.3          # 原0.2
     
     # 课程学习（第三关简单，直接训练）
     USE_CURRICULUM = False  # 禁用课程学习，直接训练

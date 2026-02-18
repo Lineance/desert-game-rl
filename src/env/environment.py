@@ -1,17 +1,13 @@
 """
-沙漠穿越环境 (POMDP) - 修复版
+沙漠穿越环境 (POMDP)
 问题2：仅知当天天气的部分可观测决策
-
-修复内容：
-1. 挖矿逻辑：到达当天不能挖矿
-2. 行动顺序：移动→消耗→挖矿/购买→更新天数
-3. 资源计算与验证器保持一致
 """
 
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
+
 from src.env.config import (
     BASE_CONSUMPTION,
     Level3Config,
@@ -502,4 +498,5 @@ def make_env(level=3, **kwargs):
     else:
         raise ValueError(f"Unknown level: {level}")
     
+    return DesertCrossingEnv(config=config, **kwargs)
     return DesertCrossingEnv(config=config, **kwargs)

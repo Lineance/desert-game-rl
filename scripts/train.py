@@ -14,6 +14,12 @@ if __name__ == "__main__":
     parser.add_argument("--level", type=int, default=3)
     parser.add_argument("--episodes", type=int, default=2000)
     parser.add_argument("--device", type=str, default=None)
+    parser.add_argument("--log-interval", type=int, default=100)
     args = parser.parse_args()
 
-    train(level=args.level, num_episodes=args.episodes, device=args.device)
+    train(
+        level=args.level,
+        num_episodes=args.episodes,
+        device=args.device,
+        log_interval=args.log_interval,
+    )

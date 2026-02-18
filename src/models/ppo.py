@@ -10,6 +10,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
+
 from src.env.config import RLConfig
 from src.models.agent import HybridRNNAgent
 
@@ -196,6 +197,10 @@ class PPOTrainer:
         total_entropy = 0
         total_kl = 0
         total_clip_fraction = 0
+        effective_updates = 0
+        target_kl_hit = False
+        max_ratio_seen = 1.0
+        min_ratio_seen = 1.0
         
         num_updates = self.config.EPOCHS_PER_UPDATE
         
@@ -230,6 +235,8 @@ class PPOTrainer:
             
             # 策略损失（PPO裁剪）
             ratio = torch.exp(new_log_probs - old_log_probs_tensor)
+            max_ratio_seen = max(max_ratio_seen, float(ratio.max().item()))
+            min_ratio_seen = min(min_ratio_seen, float(ratio.min().item()))
             
             surr1 = ratio * advantages_tensor
             surr2 = torch.clamp(ratio, 1 - self.config.CLIP_EPS, 1 + self.config.CLIP_EPS) * advantages_tensor
@@ -270,15 +277,31 @@ class PPOTrainer:
             total_entropy += entropy.mean().item()
             total_kl += approx_kl
             total_clip_fraction += clip_fraction
+            effective_updates += 1
+
+            if approx_kl > self.config.TARGET_KL:
+                target_kl_hit = True
+                break
         
         # 返回平均统计
-        n = num_updates
+        n = max(1, effective_updates)
+
+        y_pred = values_tensor.detach().cpu().numpy()
+        y_true = returns_tensor.detach().cpu().numpy()
+        var_y = np.var(y_true)
+        explained_var = float(1.0 - np.var(y_true - y_pred) / (var_y + 1e-8))
+
         return {
             'policy_loss': total_policy_loss / n,
             'value_loss': total_value_loss / n,
             'entropy': total_entropy / n,
             'approx_kl': total_kl / n,
             'clip_fraction': total_clip_fraction / n,
+            'effective_updates': float(effective_updates),
+            'target_kl_hit': float(1.0 if target_kl_hit else 0.0),
+            'max_ratio': max_ratio_seen,
+            'min_ratio': min_ratio_seen,
+            'explained_variance': explained_var,
         }
     
     def collect_rollout(self, env, max_steps: int = 1000, epsilon: float = 0.0) -> Tuple[RolloutBuffer, float, Dict]:
@@ -302,6 +325,12 @@ class PPOTrainer:
         
         episode_return = 0
         step = 0
+        move_count = 0
+        stay_count = 0
+        mine_count = 0
+        buy_count = 0
+        total_buy_water = 0
+        total_buy_food = 0
         
         while step < max_steps:
             # 获取有效动作
@@ -313,6 +342,29 @@ class PPOTrainer:
             # 执行动作
             next_obs, reward, done, truncated, info = env.step(action)
             done_flag = done or truncated
+
+            last_action = info.get('last_action') or action
+            move_from = last_action.get('move_from')
+            move_to = last_action.get('move_to')
+            if move_from is not None and move_to is not None:
+                if move_from == move_to:
+                    stay_count += 1
+                else:
+                    move_count += 1
+            elif action.get('move') == info.get('position'):
+                stay_count += 1
+            else:
+                move_count += 1
+
+            if bool(last_action.get('mine', False)):
+                mine_count += 1
+
+            bought_w = int(last_action.get('buy_water', 0))
+            bought_f = int(last_action.get('buy_food', 0))
+            total_buy_water += bought_w
+            total_buy_food += bought_f
+            if bought_w > 0 or bought_f > 0:
+                buy_count += 1
             
             # BUG修复: 直接使用全局节点ID，不要转换为局部索引
             # 因为evaluate_actions期望的是全局ID来索引全局概率分布
@@ -353,6 +405,12 @@ class PPOTrainer:
             'reached': info.get('reached', False),
             'final_money': info.get('money', 0),
             'final_day': info.get('day', 0),
+            'move_count': move_count,
+            'stay_count': stay_count,
+            'mine_count': mine_count,
+            'buy_count': buy_count,
+            'total_buy_water': total_buy_water,
+            'total_buy_food': total_buy_food,
         }
         
         return buffer, last_value, episode_info
@@ -390,4 +448,5 @@ class CurriculumScheduler:
             # 阶段1：全知天气
             pass
         if 'mode' in stage:
+            env.weather_mode = stage['mode']
             env.weather_mode = stage['mode']
