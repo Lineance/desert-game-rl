@@ -47,7 +47,7 @@ def _sample_action(valid_actions, rng):
 )
 def test_fuzz_invariants_game_rules(seed, steps):
 
-    env = make_env(level=3, seed=seed)
+    env = make_env(level=4, seed=seed)
     env.reset(seed=seed)
 
     rng = np.random.RandomState(seed)

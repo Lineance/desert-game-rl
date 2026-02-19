@@ -513,6 +513,52 @@ def test_village_purchase_on_arrival_from_move(monkeypatch):
     )
 
 
+def test_valid_actions_allows_buy_if_village_reachable(monkeypatch):
+    env = make_env(level=3, seed=30)
+    env.reset(seed=30)
+
+    env.step({"move": env.state.position, "mine": False, "buy_water": 40, "buy_food": 40})
+
+    start = env.config.START
+    village_node = env.neighbors[start][0]
+    monkeypatch.setattr(env.config, "VILLAGES", [village_node], raising=False)
+
+    env.state.day = 1
+    env.state.position = start
+    env.state.weather_today = Weather.SUNNY
+    env.state.path_history = [start, start]
+
+    va = env.get_valid_actions()
+    assert village_node in va["valid_moves"]
+    assert va["can_buy"] is True
+    assert va["max_buy_water"] > 0 or va["max_buy_food"] > 0
+
+
+def test_valid_actions_buy_bound_uses_post_consumption_state(monkeypatch):
+    env = make_env(level=3, seed=31)
+    env.reset(seed=31)
+
+    env.step({"move": env.state.position, "mine": False, "buy_water": 40, "buy_food": 40})
+
+    start = env.config.START
+    village_node = env.neighbors[start][0]
+    monkeypatch.setattr(env.config, "VILLAGES", [village_node], raising=False)
+
+    env.state.day = 1
+    env.state.position = village_node
+    env.state.weather_today = Weather.SUNNY
+    env.state.water = 20
+    env.state.food = 20
+    env.state.money = 1000
+    env.state.path_history = [start, village_node]
+
+    va = env.get_valid_actions()
+    # 晴朗停留先消耗后，水食分别减少3/4，再购买；上界应基于消耗后状态估算，不应退化为0
+    assert va["can_buy"] is True
+    assert va["max_buy_water"] >= 1
+    assert va["max_buy_food"] >= 1
+
+
 def test_final_day_sandstorm_blocks_reaching_end():
     env = make_env(level=3, seed=23)
     env.reset(seed=23)

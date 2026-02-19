@@ -459,27 +459,53 @@ class DesertCrossingEnv:
             and s.path_history[-1] == s.path_history[-2]
         )
 
-        can_buy = (
+        can_buy_now = (
             s.day == 0 and s.position == self.config.START and not s.has_purchased_at_start
         ) or (s.position in self.config.VILLAGES)
+        can_buy_after_move = s.day >= 1 and any(m in self.config.VILLAGES for m in valid_moves)
+        can_buy = can_buy_now or can_buy_after_move
 
         max_buy_water = 0
         max_buy_food = 0
         if can_buy:
-            current_weight = s.water * self.config.WATER_WEIGHT + s.food * self.config.FOOD_WEIGHT
-            remaining_weight = max(0, self.config.WEIGHT_LIMIT - current_weight)
-
             if s.day == 0 and s.position == self.config.START and not s.has_purchased_at_start:
+                est_water_after_cons = s.water
+                est_food_after_cons = s.food
+                est_money_after_cons = s.money
                 water_price = self.config.WATER_PRICE_BASE
                 food_price = self.config.FOOD_PRICE_BASE
             else:
+                base_w, base_f = BASE_CONSUMPTION[s.weather_today]
+
+                can_mine_now = (
+                    s.position in self.config.MINES
+                    and len(s.path_history) >= 2
+                    and s.path_history[-1] == s.path_history[-2]
+                )
+
+                possible_factors = [1]
+                if len(valid_moves) > 1:
+                    possible_factors.append(2)
+                if can_mine_now:
+                    possible_factors.append(3)
+
+                min_factor = min(possible_factors)
+                est_water_after_cons = max(0, s.water - base_w * min_factor)
+                est_food_after_cons = max(0, s.food - base_f * min_factor)
+                est_money_after_cons = s.money + (self.config.MINE_INCOME if can_mine_now else 0)
                 water_price = self.config.WATER_PRICE_BASE * 2
                 food_price = self.config.FOOD_PRICE_BASE * 2
 
+            current_weight = (
+                est_water_after_cons * self.config.WATER_WEIGHT
+                + est_food_after_cons * self.config.FOOD_WEIGHT
+            )
+            remaining_weight = max(0, self.config.WEIGHT_LIMIT - current_weight)
+
             max_by_weight_water = remaining_weight // self.config.WATER_WEIGHT
             max_by_weight_food = remaining_weight // self.config.FOOD_WEIGHT
-            max_by_money_water = int(s.money // water_price) if water_price > 0 else 0
-            max_by_money_food = int(s.money // food_price) if food_price > 0 else 0
+            max_by_money_water = int(est_money_after_cons // water_price) if water_price > 0 else 0
+            max_by_money_food = int(est_money_after_cons // food_price) if food_price > 0 else 0
 
             max_buy_water = int(max(0, min(200, max_by_weight_water, max_by_money_water)))
             max_buy_food = int(max(0, min(200, max_by_weight_food, max_by_money_food)))
