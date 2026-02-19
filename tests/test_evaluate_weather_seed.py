@@ -58,14 +58,8 @@ def test_run_episode_is_reproducible_given_same_seed():
     r1 = run_episode(agent, env, seed=7, deterministic=True, verbose=False)
     r2 = run_episode(agent, env, seed=7, deterministic=True, verbose=False)
 
-    rec1 = [
-        (x["day"], x["position"], x["weather"], x["water"], x["food"])
-        for x in r1["records"]
-    ]
-    rec2 = [
-        (x["day"], x["position"], x["weather"], x["water"], x["food"])
-        for x in r2["records"]
-    ]
+    rec1 = [(x["day"], x["position"], x["weather"], x["water"], x["food"]) for x in r1["records"]]
+    rec2 = [(x["day"], x["position"], x["weather"], x["water"], x["food"]) for x in r2["records"]]
 
     assert rec1 == rec2
     assert r1["final_money"] == r2["final_money"]

@@ -5,11 +5,12 @@
 
 import argparse
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict
 
 import numpy as np
 import torch
-from src.env.config import Level3Config, Level4Config, RESULTS_DIR, Weather
+
+from src.env.config import RESULTS_DIR, Weather
 from src.env.environment import make_env
 from src.models.agent import HybridRNNAgent
 
@@ -46,9 +47,7 @@ def run_episode(
     while not done and step < 200:
         # 选择动作
         valid_actions = env.get_valid_actions()
-        action, value = agent.select_action(
-            obs, valid_actions, deterministic=deterministic
-        )
+        action, value = agent.select_action(obs, valid_actions, deterministic=deterministic)
 
         # 执行动作
         next_obs, reward, done, truncated, next_info = env.step(action)
@@ -258,9 +257,7 @@ def analyze_strategy(result: Dict, env):
     print(f"  遇到天气: {weather_stats}")
 
 
-def evaluate_multiple_runs(
-    agent_path: str, level: int, num_runs: int = 100, device: str = None
-):
+def evaluate_multiple_runs(agent_path: str, level: int, num_runs: int = 100, device: str = None):
     """
     多次运行评估，统计性能
     """
@@ -293,7 +290,7 @@ def evaluate_multiple_runs(
     lengths = [r["length"] for r in results]
     returns = [r["return"] for r in results]
 
-    print(f"\n统计结果:")
+    print("\n统计结果:")
     print(f"  到达率: {np.mean(reached) * 100:.1f}% ({sum(reached)}/{num_runs})")
     print(f"  平均最终资金: {np.mean(final_moneys):.2f} ± {np.std(final_moneys):.2f}")
     print(f"  平均回合长度: {np.mean(lengths):.1f} ± {np.std(lengths):.1f}")
@@ -327,7 +324,7 @@ def generate_result_excel(
     env = make_env(level=level, seed=None)
 
     # 运行多次，选择最佳
-    print(f"\n寻找最佳策略...")
+    print("\n寻找最佳策略...")
     best_result = None
     best_money = float("-inf")
 
@@ -363,9 +360,7 @@ def generate_result_excel(
 def main():
     parser = argparse.ArgumentParser(description="评估沙漠穿越智能体")
     parser.add_argument("agent_path", type=str, help="智能体模型路径")
-    parser.add_argument(
-        "--level", type=int, default=3, choices=[3, 4], help="关卡（3或4）"
-    )
+    parser.add_argument("--level", type=int, default=3, choices=[3, 4], help="关卡（3或4）")
     parser.add_argument(
         "--runs", type=int, default=1, help="运行次数（1表示单轮详细输出，>1表示统计）"
     )
@@ -387,16 +382,12 @@ def main():
         agent.eval()
         env = make_env(level=args.level, seed=None)
 
-        result = run_episode(
-            agent, env, seed=args.seed, deterministic=True, verbose=args.verbose
-        )
+        result = run_episode(agent, env, seed=args.seed, deterministic=True, verbose=args.verbose)
 
         analyze_strategy(result, env)
 
         # 导出结果
-        export_to_xlsx(
-            result, f"{args.output}/level{args.level}_result.xlsx", args.level
-        )
+        export_to_xlsx(result, f"{args.output}/level{args.level}_result.xlsx", args.level)
 
     else:
         # 多轮统计

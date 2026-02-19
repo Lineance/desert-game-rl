@@ -111,22 +111,16 @@ class WeatherBeliefModel:
     def _predict_next_weather(self, weather_today: int):
         """基于转移矩阵预测明天天气"""
         probs = self.transition_matrix[weather_today]
-        self.current_belief = BeliefState(
-            probs=probs, confidence=self.current_belief.confidence
-        )
+        self.current_belief = BeliefState(probs=probs, confidence=self.current_belief.confidence)
 
     def get_belief_vector(self) -> np.ndarray:
         """
         获取当前信念向量（用于网络输入）
         Returns: [p_sunny, p_hot, p_sandstorm, confidence]
         """
-        return np.concatenate(
-            [self.current_belief.probs, [self.current_belief.confidence]]
-        )
+        return np.concatenate([self.current_belief.probs, [self.current_belief.confidence]])
 
-    def predict_weather_sequence(
-        self, current_weather: int, horizon: int
-    ) -> np.ndarray:
+    def predict_weather_sequence(self, current_weather: int, horizon: int) -> np.ndarray:
         """
         预测未来horizon天的天气分布
 
@@ -150,9 +144,7 @@ class WeatherBeliefModel:
 
         return predictions
 
-    def expected_consumption(
-        self, current_weather: int, base_consumption: dict
-    ) -> tuple:
+    def expected_consumption(self, current_weather: int, base_consumption: dict) -> tuple:
         """
         计算预期资源消耗（考虑明天天气的不确定性）
 
@@ -211,9 +203,7 @@ class AdaptiveBeliefModel(WeatherBeliefModel):
     能够检测天气变化模式的变化并快速适应
     """
 
-    def __init__(
-        self, window_size: int = 10, adaptation_threshold: float = 0.3, **kwargs
-    ):
+    def __init__(self, window_size: int = 10, adaptation_threshold: float = 0.3, **kwargs):
         super().__init__(**kwargs)
 
         self.window_size = window_size

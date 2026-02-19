@@ -55,9 +55,7 @@ class ActorNetwork(nn.Module):
         mine_logits = self.mine_head(features)
         if valid_actions is not None and "can_mine" in valid_actions:
             can_mine = bool(valid_actions["can_mine"])
-            mine_mask = torch.tensor(
-                [[True, can_mine]], device=features.device, dtype=torch.bool
-            )
+            mine_mask = torch.tensor([[True, can_mine]], device=features.device, dtype=torch.bool)
             mine_logits = mine_logits.masked_fill(~mine_mask, float("-inf"))
         mine_probs = F.softmax(mine_logits, dim=-1)
 
@@ -100,32 +98,20 @@ class ActorNetwork(nn.Module):
         mine_action = mine_dist.sample()
         mine_log_prob = mine_dist.log_prob(mine_action)
 
-        can_buy = (
-            bool(valid_actions.get("can_buy", True))
-            if valid_actions is not None
-            else True
-        )
+        can_buy = bool(valid_actions.get("can_buy", True)) if valid_actions is not None else True
         max_buy_water = (
-            int(valid_actions.get("max_buy_water", 100))
-            if valid_actions is not None
-            else 100
+            int(valid_actions.get("max_buy_water", 100)) if valid_actions is not None else 100
         )
         max_buy_food = (
-            int(valid_actions.get("max_buy_food", 100))
-            if valid_actions is not None
-            else 100
+            int(valid_actions.get("max_buy_food", 100)) if valid_actions is not None else 100
         )
 
         if can_buy:
-            water_dist = torch.distributions.Normal(
-                dist["buy_water_mean"], dist["buy_water_std"]
-            )
+            water_dist = torch.distributions.Normal(dist["buy_water_mean"], dist["buy_water_std"])
             buy_water = torch.clamp(water_dist.sample(), 0, max_buy_water)
             water_log_prob = water_dist.log_prob(buy_water).sum(-1)
 
-            food_dist = torch.distributions.Normal(
-                dist["buy_food_mean"], dist["buy_food_std"]
-            )
+            food_dist = torch.distributions.Normal(dist["buy_food_mean"], dist["buy_food_std"])
             buy_food = torch.clamp(food_dist.sample(), 0, max_buy_food)
             food_log_prob = food_dist.log_prob(buy_food).sum(-1)
         else:
@@ -160,27 +146,15 @@ class ActorNetwork(nn.Module):
         mine_log_prob = mine_dist.log_prob(actions["mine"].long())
         mine_entropy = mine_dist.entropy()
 
-        can_buy = (
-            bool(valid_actions.get("can_buy", True))
-            if valid_actions is not None
-            else True
-        )
+        can_buy = bool(valid_actions.get("can_buy", True)) if valid_actions is not None else True
         if can_buy:
-            water_dist = torch.distributions.Normal(
-                dist["buy_water_mean"], dist["buy_water_std"]
-            )
+            water_dist = torch.distributions.Normal(dist["buy_water_mean"], dist["buy_water_std"])
             water_log_prob = water_dist.log_prob(actions["buy_water"].float()).sum(-1)
-            water_entropy = 0.5 * torch.log(
-                2 * np.pi * np.e * dist["buy_water_std"].pow(2)
-            ).sum(-1)
+            water_entropy = 0.5 * torch.log(2 * np.pi * np.e * dist["buy_water_std"].pow(2)).sum(-1)
 
-            food_dist = torch.distributions.Normal(
-                dist["buy_food_mean"], dist["buy_food_std"]
-            )
+            food_dist = torch.distributions.Normal(dist["buy_food_mean"], dist["buy_food_std"])
             food_log_prob = food_dist.log_prob(actions["buy_food"].float()).sum(-1)
-            food_entropy = 0.5 * torch.log(
-                2 * np.pi * np.e * dist["buy_food_std"].pow(2)
-            ).sum(-1)
+            food_entropy = 0.5 * torch.log(2 * np.pi * np.e * dist["buy_food_std"].pow(2)).sum(-1)
         else:
             water_log_prob = torch.zeros_like(move_log_prob)
             food_log_prob = torch.zeros_like(move_log_prob)
@@ -211,9 +185,7 @@ class CriticNetwork(nn.Module):
 class HybridRNNAgent(nn.Module):
     """简化版智能体 - MLP + Belief"""
 
-    def __init__(
-        self, obs_dim: int, num_locations: int, config: Optional[RLConfig] = None
-    ):
+    def __init__(self, obs_dim: int, num_locations: int, config: Optional[RLConfig] = None):
         super().__init__()
         if config is None:
             config = RLConfig()
@@ -289,9 +261,7 @@ class HybridRNNAgent(nn.Module):
         is_day0 = bool(len(obs) > 0 and float(obs[0]) < 1e-6)
 
         with torch.no_grad():
-            obs_tensor = (
-                torch.FloatTensor(obs).unsqueeze(0).to(next(self.parameters()).device)
-            )
+            obs_tensor = torch.FloatTensor(obs).unsqueeze(0).to(next(self.parameters()).device)
             output = self.forward(obs_tensor, valid_actions)
 
             if not deterministic and np.random.random() < epsilon:
@@ -311,22 +281,14 @@ class HybridRNNAgent(nn.Module):
                 if can_buy and is_day0:
                     max_buy_water = int(valid_actions.get("max_buy_water", 0))
                     max_buy_food = int(valid_actions.get("max_buy_food", 0))
-                    min_buy_water, min_buy_food = self._day0_purchase_floor(
-                        valid_actions
-                    )
+                    min_buy_water, min_buy_food = self._day0_purchase_floor(valid_actions)
                     if max_buy_water > 0:
-                        buy_water = int(
-                            np.random.randint(min_buy_water, max_buy_water + 1)
-                        )
+                        buy_water = int(np.random.randint(min_buy_water, max_buy_water + 1))
                     if max_buy_food > 0:
-                        buy_food = int(
-                            np.random.randint(min_buy_food, max_buy_food + 1)
-                        )
+                        buy_food = int(np.random.randint(min_buy_food, max_buy_food + 1))
 
                 mine_action = False
-                if valid_actions is not None and bool(
-                    valid_actions.get("can_mine", False)
-                ):
+                if valid_actions is not None and bool(valid_actions.get("can_mine", False)):
                     mine_action = bool(np.random.random() < 0.3)
 
                 action = {
@@ -403,8 +365,6 @@ class HybridRNNAgent(nn.Module):
 def create_agent(env, config: Optional[RLConfig] = None, device: str = "cpu"):
     """创建智能体"""
     obs_dim = 19  # 与environment一致: 6状态+3天气+4地点+6信念
-    agent = HybridRNNAgent(
-        obs_dim=obs_dim, num_locations=env.config.NUM_NODES, config=config
-    )
+    agent = HybridRNNAgent(obs_dim=obs_dim, num_locations=env.config.NUM_NODES, config=config)
     agent.to(device)
     return agent

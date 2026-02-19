@@ -147,15 +147,9 @@ class DesertCrossingEnv:
     def _compute_purchase_cost(self, water: int, food: int, at_start: bool) -> float:
         """计算购买成本"""
         if at_start:
-            return (
-                water * self.config.WATER_PRICE_BASE
-                + food * self.config.FOOD_PRICE_BASE
-            )
+            return water * self.config.WATER_PRICE_BASE + food * self.config.FOOD_PRICE_BASE
         else:
-            return (
-                water * self.config.WATER_PRICE_BASE * 2
-                + food * self.config.FOOD_PRICE_BASE * 2
-            )
+            return water * self.config.WATER_PRICE_BASE * 2 + food * self.config.FOOD_PRICE_BASE * 2
 
     def _get_observation(self) -> np.ndarray:
         """构建观测向量"""
@@ -187,9 +181,7 @@ class DesertCrossingEnv:
 
         belief_features = extract_belief_features(self.belief_model)
 
-        obs = np.concatenate(
-            [state_features, weather_onehot, location_type, belief_features]
-        )
+        obs = np.concatenate([state_features, weather_onehot, location_type, belief_features])
 
         return obs.astype(np.float32)
 
@@ -207,9 +199,7 @@ class DesertCrossingEnv:
             "last_action": self.state.last_action,
         }
 
-    def step(
-        self, action: Dict[str, Any]
-    ) -> Tuple[np.ndarray, float, bool, bool, Dict]:
+    def step(self, action: Dict[str, Any]) -> Tuple[np.ndarray, float, bool, bool, Dict]:
         """
         执行动作 - 修复版
 
@@ -248,11 +238,7 @@ class DesertCrossingEnv:
 
             # 第0天购买（起点，仅一次）
             if buy_water > 0 or buy_food > 0:
-                if (
-                    s.day == 0
-                    and s.position == self.config.START
-                    and not s.has_purchased_at_start
-                ):
+                if s.day == 0 and s.position == self.config.START and not s.has_purchased_at_start:
                     cost = self._compute_purchase_cost(buy_water, buy_food, True)
                     if cost <= s.money:
                         new_weight = (
@@ -474,24 +460,16 @@ class DesertCrossingEnv:
         )
 
         can_buy = (
-            s.day == 0
-            and s.position == self.config.START
-            and not s.has_purchased_at_start
+            s.day == 0 and s.position == self.config.START and not s.has_purchased_at_start
         ) or (s.position in self.config.VILLAGES)
 
         max_buy_water = 0
         max_buy_food = 0
         if can_buy:
-            current_weight = (
-                s.water * self.config.WATER_WEIGHT + s.food * self.config.FOOD_WEIGHT
-            )
+            current_weight = s.water * self.config.WATER_WEIGHT + s.food * self.config.FOOD_WEIGHT
             remaining_weight = max(0, self.config.WEIGHT_LIMIT - current_weight)
 
-            if (
-                s.day == 0
-                and s.position == self.config.START
-                and not s.has_purchased_at_start
-            ):
+            if s.day == 0 and s.position == self.config.START and not s.has_purchased_at_start:
                 water_price = self.config.WATER_PRICE_BASE
                 food_price = self.config.FOOD_PRICE_BASE
             else:
@@ -503,9 +481,7 @@ class DesertCrossingEnv:
             max_by_money_water = int(s.money // water_price) if water_price > 0 else 0
             max_by_money_food = int(s.money // food_price) if food_price > 0 else 0
 
-            max_buy_water = int(
-                max(0, min(200, max_by_weight_water, max_by_money_water))
-            )
+            max_buy_water = int(max(0, min(200, max_by_weight_water, max_by_money_water)))
             max_buy_food = int(max(0, min(200, max_by_weight_food, max_by_money_food)))
 
         return {

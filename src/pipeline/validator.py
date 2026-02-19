@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Set
 
 import pandas as pd
+
 from src.env.config import BASE_CONSUMPTION, Level3Config, Level4Config, Weather
 
 WEATHER_NAME_TO_ID = {
@@ -197,8 +198,7 @@ class RLResultValidator:
                 if curr_water > prev_water + 1e-6 or curr_food > prev_food + 1e-6:
                     self.error(day, "终点后资源异常增加")
                 if curr_money < prev_money - 1e-6 and (
-                    abs(curr_water - prev_water) < 1e-6
-                    and abs(curr_food - prev_food) < 1e-6
+                    abs(curr_water - prev_water) < 1e-6 and abs(curr_food - prev_food) < 1e-6
                 ):
                     self.warn(day, "终点后资金减少")
                 continue
@@ -211,9 +211,7 @@ class RLResultValidator:
                     self.error(day, f"移动到非相邻节点: {prev_loc}->{curr_loc}")
             else:
                 if curr_loc != prev_loc:
-                    self.error(
-                        day, f"标记为{action.kind}但位置变化: {prev_loc}->{curr_loc}"
-                    )
+                    self.error(day, f"标记为{action.kind}但位置变化: {prev_loc}->{curr_loc}")
 
             # 沙暴不能移动
             if weather_id == Weather.SANDSTORM and action.kind == "move":
@@ -246,9 +244,7 @@ class RLResultValidator:
 
             arrive_water = prev_water - cons_w
             arrive_food = prev_food - cons_f
-            arrive_money = prev_money + (
-                self.cfg.mine_income if action.kind == "mine" else 0
-            )
+            arrive_money = prev_money + (self.cfg.mine_income if action.kind == "mine" else 0)
 
             # 默认：仅由行动文字中的购买量驱动
             buy_w = action.buy_water
@@ -289,11 +285,7 @@ class RLResultValidator:
 
                 expected_money_end = (
                     expected_money_after_buy
-                    + (
-                        back_w * self.cfg.water_price_base
-                        + back_f * self.cfg.food_price_base
-                    )
-                    * 0.5
+                    + (back_w * self.cfg.water_price_base + back_f * self.cfg.food_price_base) * 0.5
                 )
 
                 if abs(curr_money - expected_money_end) > 1.0:

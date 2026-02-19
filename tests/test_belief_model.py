@@ -37,14 +37,10 @@ def test_expected_consumption_matches_weighted_average():
 
     exp_w, exp_f = model.expected_consumption(Weather.SUNNY, BASE_CONSUMPTION)
     expected_w = (
-        0.2 * BASE_CONSUMPTION[0][0]
-        + 0.3 * BASE_CONSUMPTION[1][0]
-        + 0.5 * BASE_CONSUMPTION[2][0]
+        0.2 * BASE_CONSUMPTION[0][0] + 0.3 * BASE_CONSUMPTION[1][0] + 0.5 * BASE_CONSUMPTION[2][0]
     )
     expected_f = (
-        0.2 * BASE_CONSUMPTION[0][1]
-        + 0.3 * BASE_CONSUMPTION[1][1]
-        + 0.5 * BASE_CONSUMPTION[2][1]
+        0.2 * BASE_CONSUMPTION[0][1] + 0.3 * BASE_CONSUMPTION[1][1] + 0.5 * BASE_CONSUMPTION[2][1]
     )
 
     assert abs(exp_w - expected_w) < 1e-6

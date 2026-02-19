@@ -7,9 +7,10 @@
 
 from __future__ import annotations
 
-from typing import Dict, List, Sequence, Tuple
+from typing import Dict, Sequence, Tuple
 
 import pulp
+
 from src.env.config import (
     BASE_CONSUMPTION,
     Level3Config,
@@ -27,9 +28,7 @@ def _pick_config(level: int):
     raise ValueError(f"Unsupported level: {level}")
 
 
-def _build_model(
-    config_cls, weather_seq: Sequence[int]
-) -> Tuple[pulp.LpProblem, Dict[str, Dict]]:
+def _build_model(config_cls, weather_seq: Sequence[int]) -> Tuple[pulp.LpProblem, Dict[str, Dict]]:
     if len(weather_seq) != config_cls.NUM_DAYS:
         raise ValueError(
             f"weather_seq 长度错误: {len(weather_seq)} != NUM_DAYS({config_cls.NUM_DAYS})"
@@ -51,20 +50,14 @@ def _build_model(
 
     v: Dict[str, Dict] = {}
     v["loc"] = pulp.LpVariable.dicts("loc", (range(num_nodes), days), cat="Binary")
-    v["stay"] = pulp.LpVariable.dicts(
-        "stay", (range(num_nodes), act_days), cat="Binary"
-    )
+    v["stay"] = pulp.LpVariable.dicts("stay", (range(num_nodes), act_days), cat="Binary")
     v["move"] = pulp.LpVariable.dicts(
         "move", (range(num_nodes), range(num_nodes), act_days), cat="Binary"
     )
 
     v["mine"] = pulp.LpVariable.dicts("mine", act_days, cat="Binary")
-    v["eff_w_cons"] = pulp.LpVariable.dicts(
-        "ew", act_days, lowBound=0, cat="Continuous"
-    )
-    v["eff_f_cons"] = pulp.LpVariable.dicts(
-        "ef", act_days, lowBound=0, cat="Continuous"
-    )
+    v["eff_w_cons"] = pulp.LpVariable.dicts("ew", act_days, lowBound=0, cat="Continuous")
+    v["eff_f_cons"] = pulp.LpVariable.dicts("ef", act_days, lowBound=0, cat="Continuous")
 
     v["water"] = pulp.LpVariable.dicts("w", days, lowBound=0, cat="Integer")
     v["food"] = pulp.LpVariable.dicts("f", days, lowBound=0, cat="Integer")
@@ -105,15 +98,11 @@ def _build_model(
 
         # 流平衡
         for j in range(num_nodes):
-            flow_in = pulp.lpSum(
-                v["move"][i][j][t] for i in range(num_nodes) if conn[i, j] == 1
-            )
+            flow_in = pulp.lpSum(v["move"][i][j][t] for i in range(num_nodes) if conn[i, j] == 1)
             prob += v["loc"][j][t] == v["stay"][j][t] + flow_in
 
         for i in range(num_nodes):
-            flow_out = pulp.lpSum(
-                v["move"][i][j][t] for j in range(num_nodes) if conn[i, j] == 1
-            )
+            flow_out = pulp.lpSum(v["move"][i][j][t] for j in range(num_nodes) if conn[i, j] == 1)
             prob += v["loc"][i][t - 1] == v["stay"][i][t] + flow_out
 
         total_stay = pulp.lpSum(v["stay"][i][t] for i in range(num_nodes))
@@ -173,13 +162,11 @@ def _build_model(
         prob += v["food"][t] == v["food"][t - 1] - v["eff_f_cons"][t] + v["buy_f"][t]
 
         prob += (
-            config_cls.WATER_WEIGHT * v["water"][t - 1]
-            + config_cls.FOOD_WEIGHT * v["food"][t - 1]
+            config_cls.WATER_WEIGHT * v["water"][t - 1] + config_cls.FOOD_WEIGHT * v["food"][t - 1]
             <= config_cls.WEIGHT_LIMIT
         )
         prob += (
-            config_cls.WATER_WEIGHT * v["water"][t]
-            + config_cls.FOOD_WEIGHT * v["food"][t]
+            config_cls.WATER_WEIGHT * v["water"][t] + config_cls.FOOD_WEIGHT * v["food"][t]
             <= config_cls.WEIGHT_LIMIT
         )
 
@@ -243,8 +230,7 @@ def solve_theoretical_optimal(
     status_name = pulp.LpStatus.get(prob.status, "Unknown")
     objective = (
         float(pulp.value(prob.objective))
-        if prob.status
-        in [pulp.LpStatusOptimal, pulp.LpStatusNotSolved, pulp.LpStatusUndefined]
+        if prob.status in [pulp.LpStatusOptimal, pulp.LpStatusNotSolved, pulp.LpStatusUndefined]
         else float("nan")
     )
 

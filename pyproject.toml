@@ -37,3 +37,25 @@ explicit = true
 torch = { index = "pytorch-cu128" }
 jinja2 = { index = "tsinghua" }
 markupsafe = { index = "tsinghua" }
+
+# ========== Ruff ==========
+[tool.ruff]
+target-version = "py313"  # 使用 Python 3.11 语法规则
+line-length = 100         # 每行最长 100 字符
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B"]  
+ignore = ["E501"]         # 忽略"行太长"警告（交给 formatter 处理）
+
+[tool.ruff.format]
+quote-style = "double"    # 使用双引号
+
+# ========== Pytest ==========
+[tool.pytest.ini_options]
+testpaths = ["tests"]     # 测试文件放在 tests/ 文件夹
+addopts = "-v --tb=short" # -v: 显示详细测试名，--tb=short: 错误信息简短
+
+# ========== Coverage ==========
+[tool.coverage.run]
+source = ["src"]          # 统计 src/ 文件夹的覆盖率
+omit = ["*/tests/*"]      # 不统计测试文件本身

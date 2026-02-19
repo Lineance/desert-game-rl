@@ -27,9 +27,7 @@ def test_evaluate_multiple_runs_uses_incremental_seeds(monkeypatch):
     monkeypatch.setattr(evaluate.HybridRNNAgent, "load", staticmethod(fake_load))
     monkeypatch.setattr(evaluate, "run_episode", fake_run_episode)
 
-    results = evaluate.evaluate_multiple_runs(
-        "dummy.pt", level=3, num_runs=4, device="cpu"
-    )
+    results = evaluate.evaluate_multiple_runs("dummy.pt", level=3, num_runs=4, device="cpu")
 
     assert len(results) == 4
     assert called_seeds == [0, 1, 2, 3]
@@ -91,9 +89,7 @@ def test_generate_result_excel_fallback_when_no_reached(monkeypatch, tmp_path):
 
     monkeypatch.setattr(evaluate.HybridRNNAgent, "load", staticmethod(fake_load))
     monkeypatch.setattr(evaluate, "run_episode", fake_run_episode)
-    monkeypatch.setattr(
-        evaluate, "export_to_xlsx", lambda result, filepath, level: None
-    )
+    monkeypatch.setattr(evaluate, "export_to_xlsx", lambda result, filepath, level: None)
     monkeypatch.setattr(evaluate, "analyze_strategy", lambda result, env: None)
 
     result = evaluate.generate_result_excel(

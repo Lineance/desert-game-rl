@@ -94,9 +94,7 @@ def test_fuzz_invariants_game_rules(seed, steps):
 
         prev_reached = env.state.reached
 
-        prev_weight = (
-            prev_water * env.config.WATER_WEIGHT + prev_food * env.config.FOOD_WEIGHT
-        )
+        prev_weight = prev_water * env.config.WATER_WEIGHT + prev_food * env.config.FOOD_WEIGHT
         valid_actions = env.get_valid_actions()
 
         action = _sample_action(valid_actions, rng)
@@ -109,10 +107,7 @@ def test_fuzz_invariants_game_rules(seed, steps):
 
         assert math.isfinite(env.state.money)
 
-        weight = (
-            env.state.water * env.config.WATER_WEIGHT
-            + env.state.food * env.config.FOOD_WEIGHT
-        )
+        weight = env.state.water * env.config.WATER_WEIGHT + env.state.food * env.config.FOOD_WEIGHT
 
         assert weight <= env.config.WEIGHT_LIMIT + 1e-6
 
@@ -183,9 +178,7 @@ def test_fuzz_invariants_game_rules(seed, steps):
             assert prev_weight <= env.config.WEIGHT_LIMIT + 1e-6
 
             base_w, base_f = BASE_CONSUMPTION[prev_weather]
-            moved = (
-                move_from is not None and move_to is not None and move_from != move_to
-            )
+            moved = move_from is not None and move_to is not None and move_from != move_to
 
             factor = 3 if mining else (2 if moved else 1)
 
@@ -212,9 +205,7 @@ def test_fuzz_invariants_game_rules(seed, steps):
             else:
                 expected_cost = 0
 
-            expected_money = (
-                prev_money + (env.config.MINE_INCOME if mining else 0) - expected_cost
-            )
+            expected_money = prev_money + (env.config.MINE_INCOME if mining else 0) - expected_cost
 
             assert math.isfinite(expected_money)
 

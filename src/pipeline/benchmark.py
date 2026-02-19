@@ -16,6 +16,7 @@ from typing import Dict, List, Optional
 
 import numpy as np
 import torch
+
 from src.env.config import Level3Config, Level4Config
 from src.env.environment import make_env
 from src.models.agent import HybridRNNAgent
@@ -115,9 +116,7 @@ def evaluate_model(
         env = make_env(level=level, weather_mode=mode, seed=None)
         mode_results = []
         for seed in range(runs):
-            result = run_episode(
-                agent, env, seed=seed, deterministic=deterministic, verbose=False
-            )
+            result = run_episode(agent, env, seed=seed, deterministic=deterministic, verbose=False)
             mode_results.append(result)
             all_results.append(result)
 
@@ -143,9 +142,7 @@ def evaluate_model_detailed(
         env = make_env(level=level, weather_mode=mode, seed=None)
         mode_results: List[Dict] = []
         for seed in range(runs):
-            result = run_episode(
-                agent, env, seed=seed, deterministic=deterministic, verbose=False
-            )
+            result = run_episode(agent, env, seed=seed, deterministic=deterministic, verbose=False)
             result["seed"] = seed
             result["weather_mode"] = mode
             mode_results.append(result)
@@ -176,9 +173,7 @@ def evaluate_random_baseline(
 def _print_summary(title: str, summary: Dict[str, Dict[str, float]]) -> None:
     print(f"\n{title}")
     print("=" * 78)
-    print(
-        f"{'模式':<18}{'成功率':>10}{'均资金':>12}{'均回报':>12}{'均步长':>10}{'早死率':>10}"
-    )
+    print(f"{'模式':<18}{'成功率':>10}{'均资金':>12}{'均回报':>12}{'均步长':>10}{'早死率':>10}")
     for mode, stats in summary.items():
         print(
             f"{mode:<18}"
@@ -210,9 +205,7 @@ def evaluate_oracle_upper_bound(
             if env.state is None:
                 continue
             weather_seq = list(env.state.weather_future)
-            oracle = solve_theoretical_optimal(
-                level, weather_seq, time_limit=oracle_time_limit
-            )
+            oracle = solve_theoretical_optimal(level, weather_seq, time_limit=oracle_time_limit)
             if np.isfinite(oracle["objective"]):
                 values.append(float(oracle["objective"]))
                 overall_values.append(float(oracle["objective"]))
@@ -258,9 +251,7 @@ def compare_model_vs_oracle(
             if env.state is None:
                 continue
             weather_seq = list(env.state.weather_future)
-            oracle = solve_theoretical_optimal(
-                level, weather_seq, time_limit=oracle_time_limit
-            )
+            oracle = solve_theoretical_optimal(level, weather_seq, time_limit=oracle_time_limit)
             oracle_obj = float(oracle["objective"])
             model_money = float(r["final_money"])
 
@@ -336,12 +327,8 @@ def main() -> None:
     parser.add_argument(
         "--stochastic", action="store_true", help="使用随机采样策略评估（默认贪心）"
     )
-    parser.add_argument(
-        "--with-random-baseline", action="store_true", help="输出随机策略基线"
-    )
-    parser.add_argument(
-        "--with-oracle", action="store_true", help="计算数学规划Oracle上界并对比"
-    )
+    parser.add_argument("--with-random-baseline", action="store_true", help="输出随机策略基线")
+    parser.add_argument("--with-oracle", action="store_true", help="计算数学规划Oracle上界并对比")
     parser.add_argument(
         "--oracle-time-limit", type=int, default=30, help="Oracle单次求解时限（秒）"
     )
@@ -418,9 +405,7 @@ def main() -> None:
         }
         out_path = Path(args.output_json)
         out_path.parent.mkdir(parents=True, exist_ok=True)
-        out_path.write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
+        out_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         print(f"\n结果已保存: {out_path}")
 
     if args.min_success_rate is not None:

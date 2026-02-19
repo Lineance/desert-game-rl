@@ -1,5 +1,4 @@
 import numpy as np
-import pytest
 
 from src.env.config import Weather
 from src.env.environment import make_env
@@ -9,9 +8,7 @@ def test_day0_purchase_only_once():
     env = make_env(level=3, seed=1)
     env.reset(seed=1)
 
-    env.step(
-        {"move": env.state.position, "mine": False, "buy_water": 10, "buy_food": 10}
-    )
+    env.step({"move": env.state.position, "mine": False, "buy_water": 10, "buy_food": 10})
 
     assert env.state.has_purchased_at_start is True
     assert env.state.day == 1
@@ -25,9 +22,7 @@ def test_day0_purchase_has_no_consumption():
     env = make_env(level=3, seed=2)
     env.reset(seed=2)
 
-    env.step(
-        {"move": env.state.position, "mine": False, "buy_water": 15, "buy_food": 12}
-    )
+    env.step({"move": env.state.position, "mine": False, "buy_water": 15, "buy_food": 12})
 
     assert env.state.water == 15
     assert env.state.food == 12
@@ -37,9 +32,7 @@ def test_sandstorm_mining_allowed_when_staying_on_mine():
     env = make_env(level=3, seed=3)
     env.reset(seed=3)
 
-    env.step(
-        {"move": env.state.position, "mine": False, "buy_water": 60, "buy_food": 60}
-    )
+    env.step({"move": env.state.position, "mine": False, "buy_water": 60, "buy_food": 60})
 
     mine_node = env.config.MINES[0]
     env.state.day = 1
@@ -50,9 +43,7 @@ def test_sandstorm_mining_allowed_when_staying_on_mine():
     env.state.weather_today = Weather.SANDSTORM
     env.state.path_history = [mine_node, mine_node]
 
-    _, _, done, _, info = env.step(
-        {"move": mine_node, "mine": True, "buy_water": 0, "buy_food": 0}
-    )
+    _, _, done, _, info = env.step({"move": mine_node, "mine": True, "buy_water": 0, "buy_food": 0})
 
     assert done is False
     assert info["last_action"]["mine"] is True
@@ -76,9 +67,7 @@ def test_step_terminates_when_resources_insufficient():
     env = make_env(level=3, seed=5)
     env.reset(seed=5)
 
-    env.step(
-        {"move": env.state.position, "mine": False, "buy_water": 10, "buy_food": 10}
-    )
+    env.step({"move": env.state.position, "mine": False, "buy_water": 10, "buy_food": 10})
 
     env.state.day = 1
     env.state.position = env.config.START
@@ -101,17 +90,13 @@ def test_non_adjacent_move_is_blocked():
     env = make_env(level=3, seed=6)
     env.reset(seed=6)
 
-    env.step(
-        {"move": env.state.position, "mine": False, "buy_water": 30, "buy_food": 30}
-    )
+    env.step({"move": env.state.position, "mine": False, "buy_water": 30, "buy_food": 30})
 
     env.state.day = 1
     env.state.weather_today = Weather.SUNNY
     prev_pos = env.state.position
     invalid_target = next(
-        i
-        for i in range(env.config.NUM_NODES)
-        if i not in env.neighbors[prev_pos] and i != prev_pos
+        i for i in range(env.config.NUM_NODES) if i not in env.neighbors[prev_pos] and i != prev_pos
     )
 
     _, _, done, _, info = env.step(
@@ -138,9 +123,7 @@ def test_reach_end_refund_matches_remaining_resources():
     env.state.weather_today = Weather.SUNNY
     env.state.path_history = [prev_node, prev_node]
 
-    _, _, done, _, info = env.step(
-        {"move": end_node, "mine": False, "buy_water": 0, "buy_food": 0}
-    )
+    _, _, done, _, info = env.step({"move": end_node, "mine": False, "buy_water": 0, "buy_food": 0})
 
     assert done is True
     assert info["reached"] is True
@@ -160,9 +143,7 @@ def test_timeout_terminates_when_not_reached():
     env = make_env(level=3, seed=8)
     env.reset(seed=8)
 
-    env.step(
-        {"move": env.state.position, "mine": False, "buy_water": 30, "buy_food": 30}
-    )
+    env.step({"move": env.state.position, "mine": False, "buy_water": 30, "buy_food": 30})
 
     env.state.day = env.config.NUM_DAYS
     env.state.position = env.config.START
@@ -185,9 +166,7 @@ def test_sandstorm_move_attempt_forces_stay_and_penalty():
     env = make_env(level=3, seed=9)
     env.reset(seed=9)
 
-    env.step(
-        {"move": env.state.position, "mine": False, "buy_water": 50, "buy_food": 50}
-    )
+    env.step({"move": env.state.position, "mine": False, "buy_water": 50, "buy_food": 50})
 
     env.state.day = 1
     env.state.weather_today = Weather.SANDSTORM
@@ -237,9 +216,7 @@ def test_hot_weather_consumption_on_stay():
     env = make_env(level=3, seed=11)
     env.reset(seed=11)
 
-    env.step(
-        {"move": env.state.position, "mine": False, "buy_water": 40, "buy_food": 40}
-    )
+    env.step({"move": env.state.position, "mine": False, "buy_water": 40, "buy_food": 40})
 
     env.state.day = 1
     env.state.position = env.config.START
@@ -261,9 +238,7 @@ def test_hot_weather_consumption_on_move():
     env = make_env(level=3, seed=14)
     env.reset(seed=14)
 
-    env.step(
-        {"move": env.state.position, "mine": False, "buy_water": 50, "buy_food": 50}
-    )
+    env.step({"move": env.state.position, "mine": False, "buy_water": 50, "buy_food": 50})
 
     env.state.day = 1
     env.state.weather_today = Weather.HOT
@@ -274,9 +249,7 @@ def test_hot_weather_consumption_on_move():
     prev_pos = env.state.position
     next_pos = env.neighbors[prev_pos][0]
 
-    _, _, done, _, _ = env.step(
-        {"move": next_pos, "mine": False, "buy_water": 0, "buy_food": 0}
-    )
+    _, _, done, _, _ = env.step({"move": next_pos, "mine": False, "buy_water": 0, "buy_food": 0})
 
     assert done is False
     assert env.state.position == next_pos
@@ -288,9 +261,7 @@ def test_hot_weather_consumption_on_mine():
     env = make_env(level=3, seed=15)
     env.reset(seed=15)
 
-    env.step(
-        {"move": env.state.position, "mine": False, "buy_water": 80, "buy_food": 80}
-    )
+    env.step({"move": env.state.position, "mine": False, "buy_water": 80, "buy_food": 80})
 
     mine_node = env.config.MINES[0]
     env.state.day = 1
@@ -301,9 +272,7 @@ def test_hot_weather_consumption_on_mine():
     env.state.money = 1000
     env.state.path_history = [mine_node, mine_node]
 
-    _, _, done, _, info = env.step(
-        {"move": mine_node, "mine": True, "buy_water": 0, "buy_food": 0}
-    )
+    _, _, done, _, info = env.step({"move": mine_node, "mine": True, "buy_water": 0, "buy_food": 0})
 
     assert done is False
     assert info["last_action"]["mine"] is True
@@ -316,9 +285,7 @@ def test_sandstorm_mining_consumption_on_mine():
     env = make_env(level=3, seed=16)
     env.reset(seed=16)
 
-    env.step(
-        {"move": env.state.position, "mine": False, "buy_water": 80, "buy_food": 80}
-    )
+    env.step({"move": env.state.position, "mine": False, "buy_water": 80, "buy_food": 80})
 
     mine_node = env.config.MINES[0]
     env.state.day = 1
@@ -329,9 +296,7 @@ def test_sandstorm_mining_consumption_on_mine():
     env.state.money = 1000
     env.state.path_history = [mine_node, mine_node]
 
-    _, _, done, _, info = env.step(
-        {"move": mine_node, "mine": True, "buy_water": 0, "buy_food": 0}
-    )
+    _, _, done, _, info = env.step({"move": mine_node, "mine": True, "buy_water": 0, "buy_food": 0})
 
     assert done is False
     assert info["last_action"]["mine"] is True
@@ -344,9 +309,7 @@ def test_village_purchase_after_arrival(monkeypatch):
     env = make_env(level=3, seed=12)
     env.reset(seed=12)
 
-    env.step(
-        {"move": env.state.position, "mine": False, "buy_water": 30, "buy_food": 30}
-    )
+    env.step({"move": env.state.position, "mine": False, "buy_water": 30, "buy_food": 30})
 
     village_node = env.neighbors[env.config.START][0]
     monkeypatch.setattr(env.config, "VILLAGES", [village_node], raising=False)
@@ -392,9 +355,7 @@ def test_observation_and_info_fields_from_reset_and_step():
         "last_action",
     }
 
-    env.step(
-        {"move": env.state.position, "mine": False, "buy_water": 10, "buy_food": 10}
-    )
+    env.step({"move": env.state.position, "mine": False, "buy_water": 10, "buy_food": 10})
     obs2, _, _, _, info2 = env.step(
         {"move": env.state.position, "mine": False, "buy_water": 0, "buy_food": 0}
     )
@@ -480,23 +441,15 @@ def test_weather_sequence_deterministic_across_steps_with_seed():
     env1.reset(seed=42)
     env2.reset(seed=42)
 
-    env1.step(
-        {"move": env1.state.position, "mine": False, "buy_water": 40, "buy_food": 40}
-    )
-    env2.step(
-        {"move": env2.state.position, "mine": False, "buy_water": 40, "buy_food": 40}
-    )
+    env1.step({"move": env1.state.position, "mine": False, "buy_water": 40, "buy_food": 40})
+    env2.step({"move": env2.state.position, "mine": False, "buy_water": 40, "buy_food": 40})
 
     weather1 = [env1.state.weather_today]
     weather2 = [env2.state.weather_today]
 
     for _ in range(5):
-        env1.step(
-            {"move": env1.state.position, "mine": False, "buy_water": 0, "buy_food": 0}
-        )
-        env2.step(
-            {"move": env2.state.position, "mine": False, "buy_water": 0, "buy_food": 0}
-        )
+        env1.step({"move": env1.state.position, "mine": False, "buy_water": 0, "buy_food": 0})
+        env2.step({"move": env2.state.position, "mine": False, "buy_water": 0, "buy_food": 0})
         weather1.append(env1.state.weather_today)
         weather2.append(env2.state.weather_today)
 
@@ -507,9 +460,7 @@ def test_sunny_and_sandstorm_consumption_on_stay():
     env = make_env(level=3, seed=21)
     env.reset(seed=21)
 
-    env.step(
-        {"move": env.state.position, "mine": False, "buy_water": 60, "buy_food": 60}
-    )
+    env.step({"move": env.state.position, "mine": False, "buy_water": 60, "buy_food": 60})
 
     env.state.day = 1
     env.state.position = env.config.START
@@ -536,9 +487,7 @@ def test_village_purchase_on_arrival_from_move(monkeypatch):
     env = make_env(level=3, seed=22)
     env.reset(seed=22)
 
-    env.step(
-        {"move": env.state.position, "mine": False, "buy_water": 50, "buy_food": 50}
-    )
+    env.step({"move": env.state.position, "mine": False, "buy_water": 50, "buy_food": 50})
 
     village_node = env.neighbors[env.config.START][0]
     monkeypatch.setattr(env.config, "VILLAGES", [village_node], raising=False)
@@ -568,9 +517,7 @@ def test_final_day_sandstorm_blocks_reaching_end():
     env = make_env(level=3, seed=23)
     env.reset(seed=23)
 
-    env.step(
-        {"move": env.state.position, "mine": False, "buy_water": 60, "buy_food": 60}
-    )
+    env.step({"move": env.state.position, "mine": False, "buy_water": 60, "buy_food": 60})
 
     end_node = env.config.END
     prev_node = env.neighbors[end_node][0]
@@ -583,9 +530,7 @@ def test_final_day_sandstorm_blocks_reaching_end():
     env.state.money = 1000
     env.state.path_history = [prev_node, prev_node]
 
-    _, _, done, _, info = env.step(
-        {"move": end_node, "mine": False, "buy_water": 0, "buy_food": 0}
-    )
+    _, _, done, _, info = env.step({"move": end_node, "mine": False, "buy_water": 0, "buy_food": 0})
 
     assert done is True
     assert info["reached"] is False
@@ -596,9 +541,7 @@ def test_arrival_on_deadline_day_is_allowed():
     env = make_env(level=3, seed=24)
     env.reset(seed=24)
 
-    env.step(
-        {"move": env.state.position, "mine": False, "buy_water": 60, "buy_food": 60}
-    )
+    env.step({"move": env.state.position, "mine": False, "buy_water": 60, "buy_food": 60})
 
     end_node = env.config.END
     prev_node = env.neighbors[end_node][0]
@@ -611,9 +554,7 @@ def test_arrival_on_deadline_day_is_allowed():
     env.state.money = 1000
     env.state.path_history = [prev_node, prev_node]
 
-    _, _, done, _, info = env.step(
-        {"move": end_node, "mine": False, "buy_water": 0, "buy_food": 0}
-    )
+    _, _, done, _, info = env.step({"move": end_node, "mine": False, "buy_water": 0, "buy_food": 0})
 
     assert done is True
     assert info["reached"] is True
@@ -623,9 +564,7 @@ def test_insufficient_resources_fail_even_if_buy_attempted():
     env = make_env(level=3, seed=25)
     env.reset(seed=25)
 
-    env.step(
-        {"move": env.state.position, "mine": False, "buy_water": 40, "buy_food": 40}
-    )
+    env.step({"move": env.state.position, "mine": False, "buy_water": 40, "buy_food": 40})
 
     village_node = env.neighbors[env.config.START][0]
     env.config.VILLAGES.append(village_node)
@@ -652,9 +591,7 @@ def test_reached_end_state_is_frozen():
     env = make_env(level=3, seed=26)
     env.reset(seed=26)
 
-    env.step(
-        {"move": env.state.position, "mine": False, "buy_water": 60, "buy_food": 60}
-    )
+    env.step({"move": env.state.position, "mine": False, "buy_water": 60, "buy_food": 60})
 
     end_node = env.config.END
     prev_node = env.neighbors[end_node][0]
@@ -667,9 +604,7 @@ def test_reached_end_state_is_frozen():
     env.state.money = 5000
     env.state.path_history = [prev_node, prev_node]
 
-    _, _, done, _, info = env.step(
-        {"move": end_node, "mine": False, "buy_water": 0, "buy_food": 0}
-    )
+    _, _, done, _, info = env.step({"move": end_node, "mine": False, "buy_water": 0, "buy_food": 0})
 
     assert done is True
     assert info["reached"] is True
@@ -694,9 +629,7 @@ def test_failed_state_is_frozen():
     env = make_env(level=3, seed=29)
     env.reset(seed=29)
 
-    env.step(
-        {"move": env.state.position, "mine": False, "buy_water": 20, "buy_food": 20}
-    )
+    env.step({"move": env.state.position, "mine": False, "buy_water": 20, "buy_food": 20})
 
     env.state.day = 1
     env.state.position = env.config.START
@@ -733,9 +666,7 @@ def test_village_purchase_blocked_when_overweight(monkeypatch):
     env = make_env(level=3, seed=27)
     env.reset(seed=27)
 
-    env.step(
-        {"move": env.state.position, "mine": False, "buy_water": 80, "buy_food": 80}
-    )
+    env.step({"move": env.state.position, "mine": False, "buy_water": 80, "buy_food": 80})
 
     village_node = env.neighbors[env.config.START][0]
     monkeypatch.setattr(env.config, "VILLAGES", [village_node], raising=False)
@@ -768,9 +699,7 @@ def test_village_purchase_blocked_when_money_insufficient(monkeypatch):
     env = make_env(level=3, seed=28)
     env.reset(seed=28)
 
-    env.step(
-        {"move": env.state.position, "mine": False, "buy_water": 40, "buy_food": 40}
-    )
+    env.step({"move": env.state.position, "mine": False, "buy_water": 40, "buy_food": 40})
 
     village_node = env.neighbors[env.config.START][0]
     monkeypatch.setattr(env.config, "VILLAGES", [village_node], raising=False)
@@ -805,9 +734,7 @@ def test_reset_seed_supports_stochastic_evaluation_interface():
     for seed in range(5):
         env = make_env(level=3, seed=seed)
         env.reset(seed=seed)
-        env.step(
-            {"move": env.state.position, "mine": False, "buy_water": 40, "buy_food": 40}
-        )
+        env.step({"move": env.state.position, "mine": False, "buy_water": 40, "buy_food": 40})
 
         total_reward = 0.0
         for _ in range(3):

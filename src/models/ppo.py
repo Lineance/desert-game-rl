@@ -43,9 +43,7 @@ class RolloutBuffer:
         self.log_probs: List[float] = []
         self.dones: List[bool] = []
         self.hidden_states: List[Optional[Tuple]] = []
-        self.valid_actions_list: List[
-            Optional[Dict]
-        ] = []  # BUG修复1: 存储valid_actions
+        self.valid_actions_list: List[Optional[Dict]] = []  # BUG修复1: 存储valid_actions
 
     def add(
         self,
@@ -109,11 +107,7 @@ class RolloutBuffer:
                 next_value = self.values[t + 1]
 
             # TD误差
-            delta = (
-                self.rewards[t]
-                + gamma * next_value * next_non_terminal
-                - self.values[t]
-            )
+            delta = self.rewards[t] + gamma * next_value * next_non_terminal - self.values[t]
 
             # GAE
             gae = delta + gamma * gae_lambda * next_non_terminal * gae
@@ -180,9 +174,7 @@ class PPOTrainer:
             "clip_fraction": [],
         }
 
-    def update(
-        self, rollout_buffer: RolloutBuffer, last_value: float
-    ) -> Dict[str, float]:
+    def update(self, rollout_buffer: RolloutBuffer, last_value: float) -> Dict[str, float]:
         """
         使用收集的数据更新策略
 
@@ -203,9 +195,7 @@ class PPOTrainer:
         obs_tensor = torch.from_numpy(obs_array).to(self.device)
         returns_tensor = torch.FloatTensor(returns).to(self.device)
         advantages_tensor = torch.FloatTensor(advantages).to(self.device)
-        old_log_probs_tensor = torch.FloatTensor(rollout_buffer.log_probs).to(
-            self.device
-        )
+        old_log_probs_tensor = torch.FloatTensor(rollout_buffer.log_probs).to(self.device)
         values_tensor = torch.FloatTensor(rollout_buffer.values).to(
             self.device
         )  # BUG修复6: 用于价值裁剪
@@ -217,18 +207,14 @@ class PPOTrainer:
 
         # 准备动作张量
         actions = {
-            "move": torch.LongTensor([a["move"] for a in rollout_buffer.actions]).to(
+            "move": torch.LongTensor([a["move"] for a in rollout_buffer.actions]).to(self.device),
+            "mine": torch.FloatTensor([a["mine"] for a in rollout_buffer.actions]).to(self.device),
+            "buy_water": torch.FloatTensor([a["buy_water"] for a in rollout_buffer.actions]).to(
                 self.device
             ),
-            "mine": torch.FloatTensor([a["mine"] for a in rollout_buffer.actions]).to(
+            "buy_food": torch.FloatTensor([a["buy_food"] for a in rollout_buffer.actions]).to(
                 self.device
             ),
-            "buy_water": torch.FloatTensor(
-                [a["buy_water"] for a in rollout_buffer.actions]
-            ).to(self.device),
-            "buy_food": torch.FloatTensor(
-                [a["buy_food"] for a in rollout_buffer.actions]
-            ).to(self.device),
         }
 
         # 多轮更新
@@ -299,9 +285,7 @@ class PPOTrainer:
             entropy_loss = -entropy.mean()
 
             # 总损失
-            loss = (
-                policy_loss + 0.5 * value_loss + self.config.ENTROPY_COEF * entropy_loss
-            )
+            loss = policy_loss + 0.5 * value_loss + self.config.ENTROPY_COEF * entropy_loss
 
             # 反向传播
             self.optimizer.zero_grad()
@@ -315,9 +299,7 @@ class PPOTrainer:
             # 统计
             with torch.no_grad():
                 approx_kl = ((ratio - 1) - ratio.log()).mean().item()
-                clip_fraction = (
-                    ((ratio - 1).abs() > self.config.CLIP_EPS).float().mean().item()
-                )
+                clip_fraction = ((ratio - 1).abs() > self.config.CLIP_EPS).float().mean().item()
 
             total_policy_loss += policy_loss.item()
             total_value_loss += value_loss.item()
@@ -386,9 +368,7 @@ class PPOTrainer:
             valid_actions = env.get_valid_actions()
 
             # 选择动作（带ε-贪婪探索）
-            action, value = self.agent.select_action(
-                obs, valid_actions, epsilon=epsilon
-            )
+            action, value = self.agent.select_action(obs, valid_actions, epsilon=epsilon)
 
             # 执行动作
             next_obs, reward, done, truncated, info = env.step(action)
@@ -428,12 +408,8 @@ class PPOTrainer:
                     {
                         "move": torch.LongTensor([action_idx["move"]]).to(self.device),
                         "mine": torch.FloatTensor([action_idx["mine"]]).to(self.device),
-                        "buy_water": torch.FloatTensor([action_idx["buy_water"]]).to(
-                            self.device
-                        ),
-                        "buy_food": torch.FloatTensor([action_idx["buy_food"]]).to(
-                            self.device
-                        ),
+                        "buy_water": torch.FloatTensor([action_idx["buy_water"]]).to(self.device),
+                        "buy_food": torch.FloatTensor([action_idx["buy_food"]]).to(self.device),
                     },
                     valid_actions,
                 )
@@ -460,9 +436,7 @@ class PPOTrainer:
         # 获取最后状态价值（用于GAE）
         with torch.no_grad():
             obs_tensor = torch.FloatTensor(obs).unsqueeze(0).to(self.device)
-            last_value = self.agent.critic(
-                self.agent.encode_observation(obs_tensor)
-            ).item()
+            last_value = self.agent.critic(self.agent.encode_observation(obs_tensor)).item()
 
         episode_info = {
             "return": episode_return,
