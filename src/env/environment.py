@@ -218,7 +218,7 @@ class DesertCrossingEnv:
         """
         s = self.state
         
-        if s.reached:
+        if s.reached or s.terminated:
             return self._get_observation(), 0.0, True, False, self._get_info()
 
         action_day = s.day

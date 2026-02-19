@@ -11,6 +11,7 @@ dependencies = [
   "pandas>=2.0",
   "pulp>=2.8",
   "highspy>=1.13.1",
+  "hypothesis>=6.151.9",
 ]
 
 [dependency-groups]

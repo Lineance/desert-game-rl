@@ -13,6 +13,7 @@ This document maps problem rules to concrete automated tests. It is intended to 
   - [tests/test_environment_rules_extra.py](tests/test_environment_rules_extra.py)
     - `test_day0_purchase_only_once`
     - `test_timeout_terminates_when_not_reached`
+    - `test_failed_state_is_frozen`
   - [tests/test_validator_negative_more.py](tests/test_validator_negative_more.py)
     - `test_validator_flags_end_refund_mismatch` (end-state accounting)
 
@@ -20,6 +21,8 @@ This document maps problem rules to concrete automated tests. It is intended to 
   - [tests/test_environment_rules_extra.py](tests/test_environment_rules_extra.py)
     - `test_valid_actions_respects_weight_limit_on_day0`
     - `test_step_terminates_when_resources_insufficient`
+    - `test_insufficient_resources_fail_even_if_buy_attempted`
+    - `test_village_purchase_blocked_when_overweight`
   - [tests/test_validator_negative_more.py](tests/test_validator_negative_more.py)
     - `test_validator_flags_resource_mismatch`
 
@@ -51,6 +54,7 @@ This document maps problem rules to concrete automated tests. It is intended to 
   - [tests/test_environment_rules_extra.py](tests/test_environment_rules_extra.py)
     - `test_day0_purchase_only_once`
     - `test_reach_end_refund_matches_remaining_resources`
+    - `test_reached_end_state_is_frozen`
   - [tests/test_validator_negative_more.py](tests/test_validator_negative_more.py)
     - `test_validator_flags_end_refund_mismatch`
 
@@ -67,6 +71,7 @@ This document maps problem rules to concrete automated tests. It is intended to 
   - [tests/test_environment_rules_extra.py](tests/test_environment_rules_extra.py)
     - `test_village_purchase_after_arrival`
     - `test_village_purchase_on_arrival_from_move`
+    - `test_village_purchase_blocked_when_money_insufficient`
   - [tests/test_validator_negative_more.py](tests/test_validator_negative_more.py)
     - `test_validator_flags_wrong_village_price`
 

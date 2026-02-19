@@ -30,6 +30,9 @@ def test_rules_audit_mapping_exists():
             "test_non_adjacent_move_is_blocked",
             "test_final_day_sandstorm_blocks_reaching_end",
             "test_arrival_on_deadline_day_is_allowed",
+            "test_insufficient_resources_fail_even_if_buy_attempted",
+            "test_reached_end_state_is_frozen",
+            "test_failed_state_is_frozen",
             "test_hot_weather_consumption_on_stay",
             "test_hot_weather_consumption_on_move",
             "test_sunny_and_sandstorm_consumption_on_stay",
@@ -40,6 +43,8 @@ def test_rules_audit_mapping_exists():
             "test_village_purchase_after_arrival",
             "test_village_purchase_on_arrival_from_move",
             "test_reset_seed_supports_stochastic_evaluation_interface",
+            "test_village_purchase_blocked_when_overweight",
+            "test_village_purchase_blocked_when_money_insufficient",
         ],
         "test_validator_negative_more.py": [
             "test_validator_flags_resource_mismatch",
