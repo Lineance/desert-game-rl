@@ -115,7 +115,9 @@ def evaluate_model(
         env = make_env(level=level, weather_mode=mode, seed=None)
         mode_results = []
         for seed in range(runs):
-            result = run_episode(agent, env, seed=seed, deterministic=deterministic, verbose=False)
+            result = run_episode(
+                agent, env, seed=seed, deterministic=deterministic, verbose=False
+            )
             mode_results.append(result)
             all_results.append(result)
 
@@ -141,7 +143,9 @@ def evaluate_model_detailed(
         env = make_env(level=level, weather_mode=mode, seed=None)
         mode_results: List[Dict] = []
         for seed in range(runs):
-            result = run_episode(agent, env, seed=seed, deterministic=deterministic, verbose=False)
+            result = run_episode(
+                agent, env, seed=seed, deterministic=deterministic, verbose=False
+            )
             result["seed"] = seed
             result["weather_mode"] = mode
             mode_results.append(result)
@@ -150,7 +154,9 @@ def evaluate_model_detailed(
     return detailed
 
 
-def evaluate_random_baseline(level: int, runs: int, weather_modes: List[str]) -> Dict[str, Dict[str, float]]:
+def evaluate_random_baseline(
+    level: int, runs: int, weather_modes: List[str]
+) -> Dict[str, Dict[str, float]]:
     summary: Dict[str, Dict[str, float]] = {}
     all_results: List[Dict] = []
 
@@ -170,7 +176,9 @@ def evaluate_random_baseline(level: int, runs: int, weather_modes: List[str]) ->
 def _print_summary(title: str, summary: Dict[str, Dict[str, float]]) -> None:
     print(f"\n{title}")
     print("=" * 78)
-    print(f"{'模式':<18}{'成功率':>10}{'均资金':>12}{'均回报':>12}{'均步长':>10}{'早死率':>10}")
+    print(
+        f"{'模式':<18}{'成功率':>10}{'均资金':>12}{'均回报':>12}{'均步长':>10}{'早死率':>10}"
+    )
     for mode, stats in summary.items():
         print(
             f"{mode:<18}"
@@ -202,7 +210,9 @@ def evaluate_oracle_upper_bound(
             if env.state is None:
                 continue
             weather_seq = list(env.state.weather_future)
-            oracle = solve_theoretical_optimal(level, weather_seq, time_limit=oracle_time_limit)
+            oracle = solve_theoretical_optimal(
+                level, weather_seq, time_limit=oracle_time_limit
+            )
             if np.isfinite(oracle["objective"]):
                 values.append(float(oracle["objective"]))
                 overall_values.append(float(oracle["objective"]))
@@ -219,7 +229,9 @@ def evaluate_oracle_upper_bound(
 
     summary["overall"] = {
         "runs": runs * len(weather_modes),
-        "oracle_solved_rate": overall_solved / (runs * len(weather_modes)) if weather_modes else 0.0,
+        "oracle_solved_rate": overall_solved / (runs * len(weather_modes))
+        if weather_modes
+        else 0.0,
         "oracle_avg_objective": float(mean(overall_values)) if overall_values else 0.0,
     }
     return summary
@@ -246,7 +258,9 @@ def compare_model_vs_oracle(
             if env.state is None:
                 continue
             weather_seq = list(env.state.weather_future)
-            oracle = solve_theoretical_optimal(level, weather_seq, time_limit=oracle_time_limit)
+            oracle = solve_theoretical_optimal(
+                level, weather_seq, time_limit=oracle_time_limit
+            )
             oracle_obj = float(oracle["objective"])
             model_money = float(r["final_money"])
 
@@ -307,17 +321,37 @@ def _print_oracle_summary(title: str, summary: Dict[str, Dict[str, float]]) -> N
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="task2 模型基准评测")
-    parser.add_argument("agent_path", type=str, help="模型路径，如 artifacts/checkpoints/level3_best.pt")
+    parser.add_argument(
+        "agent_path", type=str, help="模型路径，如 artifacts/checkpoints/level3_best.pt"
+    )
     parser.add_argument("--level", type=int, choices=[3, 4], default=3)
     parser.add_argument("--runs", type=int, default=100, help="每个天气模式的评测轮数")
     parser.add_argument("--device", type=str, default=None, help="cuda/cpu")
-    parser.add_argument("--weather-modes", type=str, default=None, help="逗号分隔，如 no_sandstorm,sunny_bias")
-    parser.add_argument("--stochastic", action="store_true", help="使用随机采样策略评估（默认贪心）")
-    parser.add_argument("--with-random-baseline", action="store_true", help="输出随机策略基线")
-    parser.add_argument("--with-oracle", action="store_true", help="计算数学规划Oracle上界并对比")
-    parser.add_argument("--oracle-time-limit", type=int, default=30, help="Oracle单次求解时限（秒）")
+    parser.add_argument(
+        "--weather-modes",
+        type=str,
+        default=None,
+        help="逗号分隔，如 no_sandstorm,sunny_bias",
+    )
+    parser.add_argument(
+        "--stochastic", action="store_true", help="使用随机采样策略评估（默认贪心）"
+    )
+    parser.add_argument(
+        "--with-random-baseline", action="store_true", help="输出随机策略基线"
+    )
+    parser.add_argument(
+        "--with-oracle", action="store_true", help="计算数学规划Oracle上界并对比"
+    )
+    parser.add_argument(
+        "--oracle-time-limit", type=int, default=30, help="Oracle单次求解时限（秒）"
+    )
     parser.add_argument("--output-json", type=str, default=None, help="保存结果到 JSON")
-    parser.add_argument("--min-success-rate", type=float, default=None, help="若 overall 成功率低于该阈值则返回非0")
+    parser.add_argument(
+        "--min-success-rate",
+        type=float,
+        default=None,
+        help="若 overall 成功率低于该阈值则返回非0",
+    )
 
     args = parser.parse_args()
 
@@ -384,7 +418,9 @@ def main() -> None:
         }
         out_path = Path(args.output_json)
         out_path.parent.mkdir(parents=True, exist_ok=True)
-        out_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        out_path.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
         print(f"\n结果已保存: {out_path}")
 
     if args.min_success_rate is not None:

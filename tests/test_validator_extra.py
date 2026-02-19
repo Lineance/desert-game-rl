@@ -48,7 +48,15 @@ def test_normalize_columns_supports_english_aliases():
     )
 
     normalized = RLResultValidator._normalize_columns(df)
-    assert list(normalized.columns) == ["day", "loc", "money", "water", "food", "weather", "action"]
+    assert list(normalized.columns) == [
+        "day",
+        "loc",
+        "money",
+        "water",
+        "food",
+        "weather",
+        "action",
+    ]
 
 
 def test_read_result_file_csv_and_missing(tmp_path):

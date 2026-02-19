@@ -33,7 +33,10 @@ def _sample_action(valid_actions, rng):
 
 
 @settings(max_examples=20, deadline=None)
-@given(seed=st.integers(min_value=0, max_value=10_000), steps=st.integers(min_value=3, max_value=12))
+@given(
+    seed=st.integers(min_value=0, max_value=10_000),
+    steps=st.integers(min_value=3, max_value=12),
+)
 def test_fuzz_invariants_no_negative_resources(seed, steps):
     env = make_env(level=3, seed=seed)
     env.reset(seed=seed)
@@ -53,7 +56,11 @@ def test_fuzz_invariants_no_negative_resources(seed, steps):
     assert last0.get("mine", False) is False
     assert last0.get("move_to") == env.config.START
 
-    expected_money0 = env.config.INIT_MONEY - buy0_w * env.config.WATER_PRICE_BASE - buy0_f * env.config.FOOD_PRICE_BASE
+    expected_money0 = (
+        env.config.INIT_MONEY
+        - buy0_w * env.config.WATER_PRICE_BASE
+        - buy0_f * env.config.FOOD_PRICE_BASE
+    )
     assert env.state.money == expected_money0
     assert env.state.water == buy0_w
     assert env.state.food == buy0_f
@@ -66,7 +73,9 @@ def test_fuzz_invariants_no_negative_resources(seed, steps):
         prev_food = env.state.food
         prev_money = env.state.money
         prev_reached = env.state.reached
-        prev_weight = prev_water * env.config.WATER_WEIGHT + prev_food * env.config.FOOD_WEIGHT
+        prev_weight = (
+            prev_water * env.config.WATER_WEIGHT + prev_food * env.config.FOOD_WEIGHT
+        )
         valid_actions = env.get_valid_actions()
         action = _sample_action(valid_actions, rng)
         _, reward, done, _, info = env.step(action)
@@ -75,7 +84,10 @@ def test_fuzz_invariants_no_negative_resources(seed, steps):
         assert env.state.food >= 0
         assert math.isfinite(env.state.money)
 
-        weight = env.state.water * env.config.WATER_WEIGHT + env.state.food * env.config.FOOD_WEIGHT
+        weight = (
+            env.state.water * env.config.WATER_WEIGHT
+            + env.state.food * env.config.FOOD_WEIGHT
+        )
         assert weight <= env.config.WEIGHT_LIMIT + 1e-6
 
         assert env.state.reached is False or env.state.position == env.config.END
@@ -118,10 +130,17 @@ def test_fuzz_invariants_no_negative_resources(seed, steps):
             assert buy_w <= max_buy_w
             assert buy_f <= max_buy_f
 
-        if action_day is not None and action_day >= 1 and not info.get("reached", False) and not done:
+        if (
+            action_day is not None
+            and action_day >= 1
+            and not info.get("reached", False)
+            and not done
+        ):
             assert prev_weight <= env.config.WEIGHT_LIMIT + 1e-6
             base_w, base_f = BASE_CONSUMPTION[prev_weather]
-            moved = move_from is not None and move_to is not None and move_from != move_to
+            moved = (
+                move_from is not None and move_to is not None and move_from != move_to
+            )
             factor = 3 if mining else (2 if moved else 1)
             assert prev_water >= base_w * factor
             assert prev_food >= base_f * factor
@@ -133,21 +152,36 @@ def test_fuzz_invariants_no_negative_resources(seed, steps):
 
             if buy_w > 0 or buy_f > 0:
                 price_mul = 2
-                expected_cost = buy_w * env.config.WATER_PRICE_BASE * price_mul + buy_f * env.config.FOOD_PRICE_BASE * price_mul
+                expected_cost = (
+                    buy_w * env.config.WATER_PRICE_BASE * price_mul
+                    + buy_f * env.config.FOOD_PRICE_BASE * price_mul
+                )
             else:
                 expected_cost = 0
 
-            expected_money = prev_money + (env.config.MINE_INCOME if mining else 0) - expected_cost
+            expected_money = (
+                prev_money + (env.config.MINE_INCOME if mining else 0) - expected_cost
+            )
             assert math.isfinite(expected_money)
             assert env.state.money == expected_money
 
             assert env.state.day == prev_day + 1
 
         if done:
-            snapshot = (env.state.position, env.state.water, env.state.food, env.state.money)
+            snapshot = (
+                env.state.position,
+                env.state.water,
+                env.state.food,
+                env.state.money,
+            )
             _, reward2, done2, _, info2 = env.step(action)
             assert done2 is True
             assert info2.get("reached", False) == info.get("reached", False)
             assert reward2 == 0.0
-            assert snapshot == (env.state.position, env.state.water, env.state.food, env.state.money)
+            assert snapshot == (
+                env.state.position,
+                env.state.water,
+                env.state.food,
+                env.state.money,
+            )
             break

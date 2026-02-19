@@ -1,4 +1,8 @@
-from src.pipeline.benchmark import _summarize, compare_model_vs_oracle, evaluate_random_baseline
+from src.pipeline.benchmark import (
+    _summarize,
+    compare_model_vs_oracle,
+    evaluate_random_baseline,
+)
 
 
 def test_summarize_basic():

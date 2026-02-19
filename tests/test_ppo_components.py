@@ -8,9 +8,13 @@ from src.models.ppo import RolloutBuffer
 def test_rolloutbuffer_compute_returns_and_advantages_simple():
     buffer = RolloutBuffer()
     for _ in range(3):
-        buffer.add(obs=np.zeros(1), action={}, reward=1.0, value=0.0, log_prob=0.0, done=False)
+        buffer.add(
+            obs=np.zeros(1), action={}, reward=1.0, value=0.0, log_prob=0.0, done=False
+        )
 
-    returns, advantages = buffer.compute_returns_and_advantages(last_value=0.0, gamma=1.0, gae_lambda=1.0)
+    returns, advantages = buffer.compute_returns_and_advantages(
+        last_value=0.0, gamma=1.0, gae_lambda=1.0
+    )
 
     assert returns == [3.0, 2.0, 1.0]
     assert advantages == [3.0, 2.0, 1.0]

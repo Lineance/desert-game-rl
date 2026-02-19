@@ -25,7 +25,13 @@ def test_export_to_csv_writes_expected_columns(tmp_path):
                 "water": 30,
                 "food": 30,
                 "weather": "晴朗",
-                "action": {"move_from": 0, "move_to": 0, "mine": False, "buy_water": 30, "buy_food": 30},
+                "action": {
+                    "move_from": 0,
+                    "move_to": 0,
+                    "mine": False,
+                    "buy_water": 30,
+                    "buy_food": 30,
+                },
             },
             {
                 "day": 1,
@@ -34,7 +40,13 @@ def test_export_to_csv_writes_expected_columns(tmp_path):
                 "water": 24,
                 "food": 22,
                 "weather": "晴朗",
-                "action": {"move_from": 0, "move_to": 3, "mine": False, "buy_water": 0, "buy_food": 0},
+                "action": {
+                    "move_from": 0,
+                    "move_to": 3,
+                    "mine": False,
+                    "buy_water": 0,
+                    "buy_food": 0,
+                },
             },
         ]
     }
@@ -44,5 +56,13 @@ def test_export_to_csv_writes_expected_columns(tmp_path):
 
     assert out.exists()
     df = pd.read_csv(out)
-    assert list(df.columns) == ["日期", "区域", "剩余资金(元)", "剩余水量(箱)", "剩余食物量(箱)", "天气", "操作"]
+    assert list(df.columns) == [
+        "日期",
+        "区域",
+        "剩余资金(元)",
+        "剩余水量(箱)",
+        "剩余食物量(箱)",
+        "天气",
+        "操作",
+    ]
     assert len(df) == 2

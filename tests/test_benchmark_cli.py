@@ -26,18 +26,22 @@ def test_benchmark_main_writes_output_json(monkeypatch, tmp_path):
     monkeypatch.setattr(benchmark, "_print_summary", lambda title, summary: None)
 
     out_path = tmp_path / "benchmark.json"
-    monkeypatch.setattr(sys, "argv", [
-        "benchmark.py",
-        "dummy.pt",
-        "--level",
-        "3",
-        "--runs",
-        "2",
-        "--weather-modes",
-        "no_sandstorm",
-        "--output-json",
-        str(out_path),
-    ])
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "benchmark.py",
+            "dummy.pt",
+            "--level",
+            "3",
+            "--runs",
+            "2",
+            "--weather-modes",
+            "no_sandstorm",
+            "--output-json",
+            str(out_path),
+        ],
+    )
 
     benchmark.main()
 
@@ -59,18 +63,22 @@ def test_benchmark_main_min_success_rate_failure(monkeypatch):
     monkeypatch.setattr(benchmark, "evaluate_model_detailed", fake_eval_detailed)
     monkeypatch.setattr(benchmark, "_print_summary", lambda title, summary: None)
 
-    monkeypatch.setattr(sys, "argv", [
-        "benchmark.py",
-        "dummy.pt",
-        "--level",
-        "3",
-        "--runs",
-        "1",
-        "--weather-modes",
-        "no_sandstorm",
-        "--min-success-rate",
-        "0.3",
-    ])
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "benchmark.py",
+            "dummy.pt",
+            "--level",
+            "3",
+            "--runs",
+            "1",
+            "--weather-modes",
+            "no_sandstorm",
+            "--min-success-rate",
+            "0.3",
+        ],
+    )
 
     with pytest.raises(SystemExit):
         benchmark.main()

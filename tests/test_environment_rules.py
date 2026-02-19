@@ -20,14 +20,18 @@ def test_sandstorm_forces_stay():
     _, _ = env.reset(seed=0)
 
     # 第0天先购买，避免资源不足立即终止
-    env.step({"move": env.state.position, "mine": False, "buy_water": 40, "buy_food": 40})
+    env.step(
+        {"move": env.state.position, "mine": False, "buy_water": 40, "buy_food": 40}
+    )
 
     # 强制到第1天沙暴，并尝试移动
     env.state.weather_today = Weather.SANDSTORM
     prev_pos = env.state.position
     neighbor = env.neighbors[prev_pos][0]
 
-    _, _, done, _, info = env.step({"move": neighbor, "mine": False, "buy_water": 0, "buy_food": 0})
+    _, _, done, _, info = env.step(
+        {"move": neighbor, "mine": False, "buy_water": 0, "buy_food": 0}
+    )
 
     assert env.state.position == prev_pos
     assert info["last_action"]["move_from"] == prev_pos
@@ -50,7 +54,9 @@ def test_arrive_day_cannot_mine():
     env.state.path_history = [from_node, from_node]
 
     prev_money = env.state.money
-    _, _, _, _, info = env.step({"move": mine_node, "mine": True, "buy_water": 0, "buy_food": 0})
+    _, _, _, _, info = env.step(
+        {"move": mine_node, "mine": True, "buy_water": 0, "buy_food": 0}
+    )
 
     # 到达当天挖矿会被忽略，不应获得矿山收益
     assert env.state.position == mine_node
@@ -73,7 +79,9 @@ def test_reach_end_zeroes_resources_after_refund():
     env.state.weather_today = Weather.SUNNY
     env.state.path_history = [prev_node, prev_node]
 
-    _, _, done, _, info = env.step({"move": end_node, "mine": False, "buy_water": 0, "buy_food": 0})
+    _, _, done, _, info = env.step(
+        {"move": end_node, "mine": False, "buy_water": 0, "buy_food": 0}
+    )
 
     assert done is True
     assert info["reached"] is True

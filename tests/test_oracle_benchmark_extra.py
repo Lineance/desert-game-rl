@@ -6,7 +6,9 @@ from src.pipeline.oracle_optimal import solve_theoretical_optimal
 
 def test_oracle_invalid_level_raises():
     with pytest.raises(ValueError):
-        solve_theoretical_optimal(99, [Weather.SUNNY] * Level3Config.NUM_DAYS, time_limit=1)
+        solve_theoretical_optimal(
+            99, [Weather.SUNNY] * Level3Config.NUM_DAYS, time_limit=1
+        )
 
 
 def test_evaluate_oracle_upper_bound_with_monkeypatch(monkeypatch):

@@ -12,7 +12,12 @@ from src.models.agent import create_agent
 from src.models.ppo import PPOTrainer
 
 
-def train(level: int = 3, num_episodes: int = 2000, device: Optional[str] = None, log_interval: int = 100) -> None:
+def train(
+    level: int = 3,
+    num_episodes: int = 2000,
+    device: Optional[str] = None,
+    log_interval: int = 100,
+) -> None:
     """训练入口。"""
     if device is None:
         device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -92,7 +97,9 @@ def train(level: int = 3, num_episodes: int = 2000, device: Optional[str] = None
 
             print(f"\nEpisode {episode}")
             print(f"  最近{window_n}局成功率: {rolling_success_rate * 100:.1f}%")
-            print(f"  最近{window_n}局: 均回报={rolling_return:.1f}, 均天数={rolling_length:.1f}, 均资金={rolling_money:.1f}")
+            print(
+                f"  最近{window_n}局: 均回报={rolling_return:.1f}, 均天数={rolling_length:.1f}, 均资金={rolling_money:.1f}"
+            )
             print(
                 f"  最近{window_n}局行为: 均移动={rolling_move:.1f}, 均停留={rolling_stay:.1f}, "
                 f"均挖矿={rolling_mine:.1f}, 均购买={rolling_buy:.1f}, "
@@ -137,4 +144,9 @@ if __name__ == "__main__":
     parser.add_argument("--log-interval", type=int, default=100)
     args = parser.parse_args()
 
-    train(level=args.level, num_episodes=args.episodes, device=args.device, log_interval=args.log_interval)
+    train(
+        level=args.level,
+        num_episodes=args.episodes,
+        device=args.device,
+        log_interval=args.log_interval,
+    )

@@ -35,16 +35,20 @@ def test_evaluate_main_runs_single_episode(monkeypatch, tmp_path):
     monkeypatch.setattr(evaluate, "export_to_xlsx", fake_export)
     monkeypatch.setattr(evaluate, "analyze_strategy", lambda result, env: None)
 
-    monkeypatch.setattr(sys, "argv", [
-        "evaluate.py",
-        "dummy.pt",
-        "--level",
-        "3",
-        "--output",
-        str(tmp_path),
-        "--seed",
-        "7",
-    ])
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "evaluate.py",
+            "dummy.pt",
+            "--level",
+            "3",
+            "--output",
+            str(tmp_path),
+            "--seed",
+            "7",
+        ],
+    )
 
     evaluate.main()
 
@@ -64,16 +68,20 @@ def test_evaluate_main_runs_multi_episode(monkeypatch):
 
     monkeypatch.setattr(evaluate, "evaluate_multiple_runs", fake_evaluate_multiple_runs)
 
-    monkeypatch.setattr(sys, "argv", [
-        "evaluate.py",
-        "dummy.pt",
-        "--level",
-        "4",
-        "--runs",
-        "12",
-        "--device",
-        "cpu",
-    ])
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "evaluate.py",
+            "dummy.pt",
+            "--level",
+            "4",
+            "--runs",
+            "12",
+            "--device",
+            "cpu",
+        ],
+    )
 
     evaluate.main()
 
