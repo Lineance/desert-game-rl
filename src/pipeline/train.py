@@ -45,9 +45,13 @@ def train(level: int = 3, num_episodes: int = 2000, device: Optional[str] = None
     print("=" * 60)
 
     max_steps = env.config.NUM_DAYS + 2
+    eps_start = 0.30
+    eps_end = 0.05
+    eps_decay_episodes = max(1, int(num_episodes * 0.7))
 
     for episode in range(num_episodes):
-        epsilon = max(0.01, 0.3 * (1 - episode / num_episodes))
+        progress = min(1.0, episode / eps_decay_episodes)
+        epsilon = eps_start + (eps_end - eps_start) * progress
 
         rollout_buffer, last_value, episode_info = trainer.collect_rollout(
             env,

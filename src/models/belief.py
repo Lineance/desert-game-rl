@@ -291,4 +291,3 @@ def extract_belief_features(belief_model: WeatherBeliefModel) -> np.ndarray:
         normalized_entropy,
         mode / 2.0  # 归一化到[0,1]
     ])
-    ])

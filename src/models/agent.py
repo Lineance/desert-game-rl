@@ -225,6 +225,18 @@ class HybridRNNAgent(nn.Module):
         action_dist = self.actor(state, valid_actions)
         value = self.critic(state)
         return {'action_dist': action_dist, 'value': value}
+
+    @staticmethod
+    def _day0_purchase_floor(valid_actions: Optional[Dict]) -> Tuple[int, int]:
+        if valid_actions is None:
+            return 0, 0
+        if not bool(valid_actions.get('can_buy', False)):
+            return 0, 0
+        max_buy_water = int(valid_actions.get('max_buy_water', 0))
+        max_buy_food = int(valid_actions.get('max_buy_food', 0))
+        floor_water = min(90, max_buy_water)
+        floor_food = min(90, max_buy_food)
+        return max(0, floor_water), max(0, floor_food)
     
     def select_action(self, obs: np.ndarray, valid_actions: Optional[Dict] = None, 
                       deterministic: bool = False, epsilon: float = 0.0) -> Tuple[Dict, float]:
@@ -249,39 +261,47 @@ class HybridRNNAgent(nn.Module):
                 if can_buy and is_day0:
                     max_buy_water = int(valid_actions.get('max_buy_water', 0))
                     max_buy_food = int(valid_actions.get('max_buy_food', 0))
-                    min_buy_water = 20 if max_buy_water >= 20 else max_buy_water
-                    min_buy_food = 20 if max_buy_food >= 20 else max_buy_food
+                    min_buy_water, min_buy_food = self._day0_purchase_floor(valid_actions)
                     if max_buy_water > 0:
                         buy_water = int(np.random.randint(min_buy_water, max_buy_water + 1))
                     if max_buy_food > 0:
                         buy_food = int(np.random.randint(min_buy_food, max_buy_food + 1))
 
+                mine_action = False
+                if valid_actions is not None and bool(valid_actions.get('can_mine', False)):
+                    mine_action = bool(np.random.random() < 0.3)
+
                 action = {
                     'move': move_global_id,
-                    'mine': False,
+                    'mine': mine_action,
                     'buy_water': buy_water,
                     'buy_food': buy_food,
                 }
             elif deterministic:
                 dist = output['action_dist']
                 move_global_id = dist['move_probs'].argmax(dim=-1).item()
+                buy_water = int(dist['buy_water_mean'].item())
+                buy_food = int(dist['buy_food_mean'].item())
+                if is_day0:
+                    floor_water, floor_food = self._day0_purchase_floor(valid_actions)
+                    buy_water = max(buy_water, floor_water)
+                    buy_food = max(buy_food, floor_food)
                 action = {
                     'move': move_global_id,
                     'mine': dist['mine_probs'][:, 1].item() > 0.5,
-                    'buy_water': int(dist['buy_water_mean'].item()),
-                    'buy_food': int(dist['buy_food_mean'].item()),
+                    'buy_water': buy_water,
+                    'buy_food': buy_food,
                 }
             else:
                 state = self.encode_observation(obs_tensor)
                 action, _ = self.actor.sample_action(state, valid_actions)
 
-                # 第0天若可买但采样为0，给予最低采购探索，避免直接死亡塌陷
+                # 第0天设置采购下限，避免低资源早死局部最优
                 can_buy = bool(valid_actions.get('can_buy', False)) if valid_actions is not None else False
-                if can_buy and is_day0 and action['buy_water'] == 0 and action['buy_food'] == 0:
-                    max_buy_water = int(valid_actions.get('max_buy_water', 0))
-                    max_buy_food = int(valid_actions.get('max_buy_food', 0))
-                    action['buy_water'] = min(40, max_buy_water)
-                    action['buy_food'] = min(40, max_buy_food)
+                if can_buy and is_day0:
+                    floor_water, floor_food = self._day0_purchase_floor(valid_actions)
+                    action['buy_water'] = max(int(action['buy_water']), floor_water)
+                    action['buy_food'] = max(int(action['buy_food']), floor_food)
             
             value = output['value'].item()
         
@@ -301,7 +321,10 @@ class HybridRNNAgent(nn.Module):
     
     @classmethod
     def load(cls, path: str, device: str = 'cpu'):
-        checkpoint = torch.load(path, map_location=device)
+        try:
+            checkpoint = torch.load(path, map_location=device, weights_only=False)
+        except TypeError:
+            checkpoint = torch.load(path, map_location=device)
         agent = cls(
             obs_dim=checkpoint['obs_dim'],
             num_locations=checkpoint['num_locations'],
@@ -317,5 +340,4 @@ def create_agent(env, config: Optional[RLConfig] = None, device: str = 'cpu'):
     obs_dim = 19  # 与environment一致: 6状态+3天气+4地点+6信念
     agent = HybridRNNAgent(obs_dim=obs_dim, num_locations=env.config.NUM_NODES, config=config)
     agent.to(device)
-    return agent
     return agent

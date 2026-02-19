@@ -223,6 +223,7 @@ class DesertCrossingEnv:
 
         action_day = s.day
         prev_position = s.position
+        prev_dist_to_end = self.dist_to_end[prev_position]
         
         # 解析动作
         move_target = action.get('move', s.position)
@@ -347,6 +348,8 @@ class DesertCrossingEnv:
         if mining:
             s.money += self.config.MINE_INCOME
             reward += 1.0
+            if "挖矿" not in s.action_history:
+                reward += 3.0
         
         # ========== 4. 购买处理（第1天及以后，仅村庄）==========
         # 第0天的购买已在前面处理，起点不能重复购买
@@ -392,11 +395,9 @@ class DesertCrossingEnv:
             s.money += refund
             s.water = 0
             s.food = 0
-            # BUG修复5: 奖励缩放，与过程奖励同量级
-            # 原设计可能导致奖励过大(150+)，与过程奖励(±20)失衡
-            # 新设计: 基础10 + (资金比例-1)*5，范围约-40到+60
+            # 终点奖励：显著区分“到达”与“早死/超时”，同时保留资金效率导向
             money_ratio = s.money / self.config.INIT_MONEY
-            reward += 10.0 + (money_ratio - 1.0) * 5.0
+            reward += 60.0 + (money_ratio - 1.0) * 10.0
         
         # ========== 7. 更新天数和天气 ==========
         if not terminated:
@@ -417,22 +418,23 @@ class DesertCrossingEnv:
                 
                 # 奖励设计（修复探索崩溃：强制前进）
                 if len(s.path_history) > 1:
-                    prev_dist = self.dist_to_end[s.path_history[-2]]
+                    prev_dist = prev_dist_to_end
                     curr_dist = self.dist_to_end[s.position]
                     dist_improvement = prev_dist - curr_dist  # 正数表示靠近
                     
                     if dist_improvement > 0:
-                        reward += 20.0 * dist_improvement     # 大幅提高靠近奖励
+                        reward += 8.0 * dist_improvement
                     elif dist_improvement < 0:
-                        reward -= 15.0 * abs(dist_improvement) # 大幅提高远离惩罚
-                    else:
-                        reward -= 5.0                          # 停留惩罚加重（-1→-5）
+                        reward -= 8.0 * abs(dist_improvement)
+
+                    if dist_improvement == 0 and not mining and s.weather_today != Weather.SANDSTORM:
+                        reward -= 2.0
                 
-                # 生存成本（迫使必须前进）
-                reward -= 2.0
+                # 生存成本（轻度）
+                reward -= 1.0
                 
-                # 时间压力（防止无限拖延）
-                reward -= (s.day / self.config.NUM_DAYS) * 10.0
+                # 时间压力（轻度）
+                reward -= (s.day / self.config.NUM_DAYS) * 4.0
         
         info = self._get_info()
         info['action_day'] = action_day
@@ -498,5 +500,4 @@ def make_env(level=3, **kwargs):
     else:
         raise ValueError(f"Unknown level: {level}")
     
-    return DesertCrossingEnv(config=config, **kwargs)
     return DesertCrossingEnv(config=config, **kwargs)
