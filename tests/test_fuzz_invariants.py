@@ -59,13 +59,16 @@ def test_fuzz_invariants_no_negative_resources(seed, steps):
     assert env.state.food == buy0_f
 
     for _ in range(steps):
+        prev_day = env.state.day
         prev_pos = env.state.position
         prev_weather = env.state.weather_today
         prev_water = env.state.water
         prev_food = env.state.food
         prev_money = env.state.money
+        prev_reached = env.state.reached
         prev_weight = prev_water * env.config.WATER_WEIGHT + prev_food * env.config.FOOD_WEIGHT
-        action = _sample_action(env.get_valid_actions(), rng)
+        valid_actions = env.get_valid_actions()
+        action = _sample_action(valid_actions, rng)
         _, reward, done, _, info = env.step(action)
 
         assert env.state.water >= 0
@@ -74,6 +77,9 @@ def test_fuzz_invariants_no_negative_resources(seed, steps):
 
         weight = env.state.water * env.config.WATER_WEIGHT + env.state.food * env.config.FOOD_WEIGHT
         assert weight <= env.config.WEIGHT_LIMIT + 1e-6
+
+        assert env.state.reached is False or env.state.position == env.config.END
+        assert env.state.reached >= prev_reached
 
         if prev_weather == 2:  # Weather.SANDSTORM
             assert env.state.position == prev_pos
@@ -87,18 +93,30 @@ def test_fuzz_invariants_no_negative_resources(seed, steps):
 
         if move_from is not None and move_to is not None:
             assert move_to == move_from or move_to in env.neighbors[move_from]
+            assert move_to in valid_actions.get("valid_moves", [move_to])
 
         if mining:
             assert move_from == move_to
             assert env.state.position in env.config.MINES
+        else:
+            if valid_actions.get("can_mine") is False:
+                assert mining is False
 
         action_day = info.get("action_day")
         if action_day is not None:
+            assert action_day == prev_day
             if buy_w > 0 or buy_f > 0:
                 if action_day == 0:
                     assert env.state.position == env.config.START
                 else:
                     assert env.state.position in env.config.VILLAGES
+            if valid_actions.get("can_buy") is False:
+                assert buy_w == 0
+                assert buy_f == 0
+            max_buy_w = int(valid_actions.get("max_buy_water", 0))
+            max_buy_f = int(valid_actions.get("max_buy_food", 0))
+            assert buy_w <= max_buy_w
+            assert buy_f <= max_buy_f
 
         if action_day is not None and action_day >= 1 and not info.get("reached", False) and not done:
             assert prev_weight <= env.config.WEIGHT_LIMIT + 1e-6
@@ -122,6 +140,8 @@ def test_fuzz_invariants_no_negative_resources(seed, steps):
             expected_money = prev_money + (env.config.MINE_INCOME if mining else 0) - expected_cost
             assert math.isfinite(expected_money)
             assert env.state.money == expected_money
+
+            assert env.state.day == prev_day + 1
 
         if done:
             snapshot = (env.state.position, env.state.water, env.state.food, env.state.money)
