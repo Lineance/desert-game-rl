@@ -82,3 +82,23 @@ def test_benchmark_main_min_success_rate_failure(monkeypatch):
 
     with pytest.raises(SystemExit):
         benchmark.main()
+
+
+def test_benchmark_main_invalid_weather_mode(monkeypatch):
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "benchmark.py",
+            "dummy.pt",
+            "--level",
+            "3",
+            "--runs",
+            "1",
+            "--weather-modes",
+            "bad_mode",
+        ],
+    )
+
+    with pytest.raises(SystemExit):
+        benchmark.main()
