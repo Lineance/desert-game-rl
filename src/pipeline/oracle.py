@@ -7,7 +7,7 @@
 
 from __future__ import annotations
 
-from typing import Dict, Sequence, Tuple
+from typing import Dict, Mapping, Sequence, Tuple
 
 import pulp
 
@@ -28,11 +28,18 @@ def _pick_config(level: int):
     raise ValueError(f"Unsupported level: {level}")
 
 
-def _build_model(config_cls, weather_seq: Sequence[int]) -> Tuple[pulp.LpProblem, Dict[str, Dict]]:
+def _build_model(
+    config_cls,
+    weather_seq: Sequence[int],
+    base_consumption: Mapping[int, Tuple[int, int]] | None = None,
+) -> Tuple[pulp.LpProblem, Dict[str, Dict]]:
     if len(weather_seq) != config_cls.NUM_DAYS:
         raise ValueError(
             f"weather_seq 长度错误: {len(weather_seq)} != NUM_DAYS({config_cls.NUM_DAYS})"
         )
+
+    if base_consumption is None:
+        base_consumption = BASE_CONSUMPTION
 
     num_nodes = config_cls.NUM_NODES
     num_days = config_cls.NUM_DAYS
@@ -91,7 +98,7 @@ def _build_model(config_cls, weather_seq: Sequence[int]) -> Tuple[pulp.LpProblem
     # t>=1 时起点不可买，仅村庄可买
     for t in act_days:
         w_type = weather_seq[t - 1]
-        base_w, base_f = BASE_CONSUMPTION[w_type]
+        base_w, base_f = base_consumption[w_type]
 
         # 位置唯一
         prob += pulp.lpSum(v["loc"][i][t] for i in range(num_nodes)) == 1
@@ -221,6 +228,70 @@ def solve_theoretical_optimal(
             msg=False,
             timeLimit=time_limit,
             options=["--mip_rel_gap", "0.0001", "--mip_abs_gap", "0.1"],
+        )
+    except Exception:
+        solver = pulp.PULP_CBC_CMD(msg=False, timeLimit=time_limit)
+
+    prob.solve(solver)
+
+    status_name = pulp.LpStatus.get(prob.status, "Unknown")
+    objective = (
+        float(pulp.value(prob.objective))
+        if prob.status in [pulp.LpStatusOptimal, pulp.LpStatusNotSolved, pulp.LpStatusUndefined]
+        else float("nan")
+    )
+
+    def _safe_value(var) -> float:
+        value = pulp.value(var)
+        return float(value) if value is not None else float("nan")
+
+    reached = False
+    if "reached" in v:
+        r_last = pulp.value(v["reached"][config_cls.NUM_DAYS])
+        reached = bool(r_last is not None and r_last > 0.5)
+
+    final_money = _safe_value(v["money"][config_cls.NUM_DAYS])
+    final_water = _safe_value(v["water"][config_cls.NUM_DAYS])
+    final_food = _safe_value(v["food"][config_cls.NUM_DAYS])
+
+    reach_day = config_cls.NUM_DAYS
+    for day in range(config_cls.NUM_DAYS + 1):
+        r_day = pulp.value(v["reached"][day])
+        if r_day is not None and r_day > 0.5:
+            reach_day = day
+            break
+
+    return {
+        "status": status_name,
+        "objective": objective,
+        "reached": reached,
+        "final_money": final_money,
+        "final_water": final_water,
+        "final_food": final_food,
+        "reach_day": int(reach_day),
+        "length": int(reach_day),
+        "return": objective - config_cls.INIT_MONEY,
+    }
+
+
+def solve_theoretical_optimal_with_config(
+    config_cls,
+    weather_seq: Sequence[int],
+    base_consumption: Mapping[int, Tuple[int, int]] | None = None,
+    time_limit: int = 60,
+    solver_options: Sequence[str] | None = None,
+) -> Dict[str, float]:
+    """求解自定义配置的理论最优（用于扩展关卡测试）。"""
+    prob, v = _build_model(config_cls, weather_seq, base_consumption=base_consumption)
+
+    if solver_options is None:
+        solver_options = ["--mip_rel_gap", "0.0001", "--mip_abs_gap", "0.1"]
+
+    try:
+        solver = pulp.HiGHS(
+            msg=False,
+            timeLimit=time_limit,
+            options=list(solver_options),
         )
     except Exception:
         solver = pulp.PULP_CBC_CMD(msg=False, timeLimit=time_limit)
