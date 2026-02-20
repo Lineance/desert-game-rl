@@ -234,13 +234,34 @@ def solve_theoretical_optimal(
         else float("nan")
     )
 
+    def _safe_value(var) -> float:
+        value = pulp.value(var)
+        return float(value) if value is not None else float("nan")
+
     reached = False
     if "reached" in v:
         r_last = pulp.value(v["reached"][config_cls.NUM_DAYS])
         reached = bool(r_last is not None and r_last > 0.5)
 
+    final_money = _safe_value(v["money"][config_cls.NUM_DAYS])
+    final_water = _safe_value(v["water"][config_cls.NUM_DAYS])
+    final_food = _safe_value(v["food"][config_cls.NUM_DAYS])
+
+    reach_day = config_cls.NUM_DAYS
+    for day in range(config_cls.NUM_DAYS + 1):
+        r_day = pulp.value(v["reached"][day])
+        if r_day is not None and r_day > 0.5:
+            reach_day = day
+            break
+
     return {
         "status": status_name,
         "objective": objective,
         "reached": reached,
+        "final_money": final_money,
+        "final_water": final_water,
+        "final_food": final_food,
+        "reach_day": int(reach_day),
+        "length": int(reach_day),
+        "return": objective - config_cls.INIT_MONEY,
     }

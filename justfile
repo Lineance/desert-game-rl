@@ -29,13 +29,16 @@ train3:
 train4:
     uv run python scripts/train.py --level 4 --episodes 5000
 
+board:
+    uv run tensorboard --logdir artifacts/logs/tensorboard --port 6006
+
 # 评估（需指定模型路径）
 eval model level="3":
     uv run python scripts/evaluate.py {{model}} --level {{level}} --verbose
 
 # 基准测试
 bench model level="3":
-    uv run python scripts/benchmark.py {{model}} --level {{level}} --runs 10 --with-random-baseline --with-oracle
+    uv run python scripts/benchmark.py {{model}} --level {{level}} --runs 10 --with-random-baseline --with-oracle --output-json artifacts/benchmark/{{model}}.json
 
 # 验证结果文件
 validate file level="3":

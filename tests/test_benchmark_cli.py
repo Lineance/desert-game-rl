@@ -7,12 +7,6 @@ import src.pipeline.benchmark as benchmark
 
 
 def test_benchmark_main_writes_output_json(monkeypatch, tmp_path):
-    def fake_eval_model(**kwargs):
-        return {
-            "overall": {"success_rate": 0.5},
-            "no_sandstorm": {"success_rate": 0.5},
-        }
-
     def fake_eval_detailed(**kwargs):
         return {
             "no_sandstorm": [
@@ -21,8 +15,14 @@ def test_benchmark_main_writes_output_json(monkeypatch, tmp_path):
             ]
         }
 
-    monkeypatch.setattr(benchmark, "evaluate_model", fake_eval_model)
-    monkeypatch.setattr(benchmark, "evaluate_model_detailed", fake_eval_detailed)
+    def fake_summarize_detailed(**kwargs):
+        return {
+            "overall": {"success_rate": 0.5},
+            "no_sandstorm": {"success_rate": 0.5},
+        }
+
+    monkeypatch.setattr(benchmark, "evaluate_model", fake_eval_detailed)
+    monkeypatch.setattr(benchmark, "_summarize_detailed", fake_summarize_detailed)
     monkeypatch.setattr(benchmark, "_print_summary", lambda title, summary: None)
 
     out_path = tmp_path / "benchmark.json"
@@ -53,14 +53,14 @@ def test_benchmark_main_writes_output_json(monkeypatch, tmp_path):
 
 
 def test_benchmark_main_min_success_rate_failure(monkeypatch):
-    def fake_eval_model(**kwargs):
-        return {"overall": {"success_rate": 0.1}}
-
     def fake_eval_detailed(**kwargs):
         return {"no_sandstorm": [{"seed": 0, "final_money": 0.0}]}
 
-    monkeypatch.setattr(benchmark, "evaluate_model", fake_eval_model)
-    monkeypatch.setattr(benchmark, "evaluate_model_detailed", fake_eval_detailed)
+    def fake_summarize_detailed(**kwargs):
+        return {"overall": {"success_rate": 0.1}}
+
+    monkeypatch.setattr(benchmark, "evaluate_model", fake_eval_detailed)
+    monkeypatch.setattr(benchmark, "_summarize_detailed", fake_summarize_detailed)
     monkeypatch.setattr(benchmark, "_print_summary", lambda title, summary: None)
 
     monkeypatch.setattr(

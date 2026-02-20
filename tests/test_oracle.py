@@ -1,7 +1,7 @@
 import pytest
 
 from src.env.config import Level3Config, Weather
-from src.pipeline.oracle_optimal import solve_theoretical_optimal
+from src.pipeline.oracle import solve_theoretical_optimal
 
 
 def test_oracle_rejects_wrong_weather_length():
@@ -16,3 +16,9 @@ def test_oracle_returns_result_dict():
     assert "status" in result
     assert "objective" in result
     assert "reached" in result
+    assert "final_money" in result
+    assert "final_water" in result
+    assert "final_food" in result
+    assert "reach_day" in result
+    assert "length" in result
+    assert "return" in result

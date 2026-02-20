@@ -343,7 +343,7 @@ class DesertCrossingEnv:
         # 挖矿收益
         if mining:
             s.money += self.config.MINE_INCOME
-            reward += 1.0
+            reward += max(1.0, self.config.MINE_INCOME / 50.0)
             if "挖矿" not in s.action_history:
                 reward += 3.0
 
@@ -421,10 +421,13 @@ class DesertCrossingEnv:
                     curr_dist = self.dist_to_end[s.position]
                     dist_improvement = prev_dist - curr_dist  # 正数表示靠近
 
+                    if is_moving and s.position in self.config.MINES:
+                        reward += 2.0
+
                     if dist_improvement > 0:
                         reward += 8.0 * dist_improvement
                     elif dist_improvement < 0:
-                        reward -= 8.0 * abs(dist_improvement)
+                        reward -= 4.0 * abs(dist_improvement)
 
                     if (
                         dist_improvement == 0

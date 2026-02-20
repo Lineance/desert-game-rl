@@ -29,7 +29,7 @@ def test_evaluate_model_detailed_adds_seed_and_mode(monkeypatch):
     monkeypatch.setattr(benchmark.HybridRNNAgent, "load", staticmethod(fake_load))
     monkeypatch.setattr(benchmark, "run_episode", fake_run_episode)
 
-    out = benchmark.evaluate_model_detailed(
+    out = benchmark.evaluate_model(
         agent_path="dummy.pt",
         level=3,
         runs=3,

@@ -370,6 +370,13 @@ class PPOTrainer:
             # 选择动作（带ε-贪婪探索）
             action, value = self.agent.select_action(obs, valid_actions, epsilon=epsilon)
 
+            can_mine = bool(valid_actions.get("can_mine", False))
+            if can_mine and epsilon > 0.0 and np.random.random() < min(0.6, epsilon + 0.2):
+                action["move"] = int(env.state.position)
+                action["mine"] = True
+                action["buy_water"] = 0
+                action["buy_food"] = 0
+
             # 执行动作
             next_obs, reward, done, truncated, info = env.step(action)
             done_flag = done or truncated

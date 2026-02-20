@@ -119,8 +119,8 @@ class Level4Config:
     # 地点索引
     START = 0
     END = 24
-    MINES: List[int] = [18]
-    VILLAGES: List[int] = [14]
+    MINES: List[int] = [17]
+    VILLAGES: List[int] = [13]
 
     # 地图边
     EDGES: List[Tuple[int, int]] = [

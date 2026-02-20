@@ -12,6 +12,7 @@ dependencies = [
   "pulp>=2.8",
   "highspy>=1.13.1",
   "hypothesis>=6.151.9",
+  "tensorboard>=2.20.0",
 ]
 
 [dependency-groups]
