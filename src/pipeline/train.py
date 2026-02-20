@@ -241,6 +241,7 @@ def train(
     log_interval: int = 100,
     resume: Optional[str] = None,
     checkpoint_interval: int = 100,
+    weather_mode: Optional[str] = None,
 ) -> None:
     """训练入口。"""
     if device is None:
@@ -250,7 +251,7 @@ def train(
     save_dir.mkdir(parents=True, exist_ok=True)
 
     config = RLConfig()
-    env = make_env(level=level, seed=42)
+    env = make_env(level=level, seed=42, weather_mode=weather_mode or "balanced")
 
     resume_path = _resolve_resume_path(resume, level)
     checkpoint = None
@@ -307,6 +308,9 @@ def train(
 
     print("=" * 60)
     print("训练开始")
+    available_modes = ", ".join(sorted(env.config.WEATHER_MODES.keys()))
+    selected_mode = weather_mode or "balanced"
+    print(f"天气模式: {selected_mode} (可选: {available_modes})")
     print("=" * 60)
 
     csv_file, csv_writer, tb_writer, csv_path, tb_dir = _init_structured_loggers(level)
@@ -514,6 +518,12 @@ if __name__ == "__main__":
         help="断点续训模型路径，或使用 'latest' 选择最近保存",
     )
     parser.add_argument("--checkpoint-interval", type=int, default=100)
+    parser.add_argument(
+        "--weather-mode",
+        type=str,
+        default=None,
+        help="天气模式（如 no_sandstorm/sunny_bias/hot_bias/train_easy/train_medium/eval）",
+    )
     args = parser.parse_args()
 
     train(
@@ -523,4 +533,5 @@ if __name__ == "__main__":
         log_interval=args.log_interval,
         resume=args.resume,
         checkpoint_interval=args.checkpoint_interval,
+        weather_mode=args.weather_mode,
     )

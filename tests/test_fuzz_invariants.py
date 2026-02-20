@@ -3,7 +3,7 @@ import math
 import numpy as np
 import pytest
 
-from src.env.config import BASE_CONSUMPTION
+from src.env.config import BASE_CONSUMPTION, Level3Config, Level4Config, Level35Config
 from src.env.environment import make_env
 
 hypothesis = pytest.importorskip("hypothesis")
@@ -40,14 +40,21 @@ def _sample_action(valid_actions, rng):
     }
 
 
+def _iter_level_modes():
+    for level, config_cls in [(3, Level3Config), (35, Level35Config), (4, Level4Config)]:
+        for mode in sorted(config_cls.WEATHER_MODES.keys()):
+            yield level, mode, config_cls
+
+
 @settings(max_examples=200, deadline=None)
 @given(
     seed=st.integers(min_value=0, max_value=10_000),
     steps=st.integers(min_value=3, max_value=12),
 )
-def test_fuzz_invariants_game_rules(seed, steps):
-
-    env = make_env(level=4, seed=seed)
+@pytest.mark.parametrize("level, weather_mode, config_cls", list(_iter_level_modes()))
+@pytest.mark.slow
+def test_fuzz_invariants_game_rules(level, weather_mode, config_cls, seed, steps):
+    env = make_env(level=level, seed=seed, weather_mode=weather_mode)
     env.reset(seed=seed)
 
     rng = np.random.RandomState(seed)
@@ -82,6 +89,7 @@ def test_fuzz_invariants_game_rules(seed, steps):
 
     assert env.state.food == buy0_f
 
+    steps = min(steps, int(config_cls.NUM_DAYS))
     for _ in range(steps):
         prev_day = env.state.day
         prev_pos = env.state.position

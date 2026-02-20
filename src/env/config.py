@@ -107,8 +107,8 @@ class Level35Config:
     """Level 3.5 - 课程学习中间态"""
 
     # 时间：足够挖矿回本，但不至于太长
-    NUM_DAYS = 25  # Level 3(10) < 25 < Level 4(50)
-    NUM_NODES = 18  # 中等地图（Level 3:13, Level 4:25+）
+    NUM_DAYS = 20  # Level 3(10) < 25 < Level 4(50)
+    NUM_NODES = 17  # 中等地图（Level 3:13, Level 4:25+）
 
     # 经济参数
     INIT_MONEY = 10000
@@ -123,7 +123,7 @@ class Level35Config:
 
     # 关键地点（设计成"去矿山有诱惑但有风险"）
     START = 0
-    END = 17
+    END = 16
     MINES = [11]  # 偏离主路径 3-4 步，挖矿 3-5 天才能回本
     VILLAGES = [7]  # 位于去矿山的分叉口附近（战略要地）
 
@@ -177,8 +177,8 @@ class Level35Config:
 class Level4Config:
     """第四关参数"""
 
-    NUM_NODES = 100  # 节点数（通常比第三关大）
-    NUM_DAYS = 50  # 截止日期更长
+    NUM_NODES = 25  # 节点数（通常比第三关大）
+    NUM_DAYS = 30  # 截止日期更长
     INIT_MONEY = 10000
     WEIGHT_LIMIT = 1200
     MINE_INCOME = 1000
