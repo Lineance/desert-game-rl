@@ -7,7 +7,7 @@
 
 from __future__ import annotations
 
-from typing import Dict, Mapping, Sequence, Tuple
+from typing import Any, Dict, List, Mapping, Sequence, Tuple
 
 import pulp
 
@@ -15,6 +15,7 @@ from src.env.config import (
     BASE_CONSUMPTION,
     Level3Config,
     Level4Config,
+    Level35Config,
     Weather,
     get_adjacency_matrix,
 )
@@ -23,6 +24,8 @@ from src.env.config import (
 def _pick_config(level: int):
     if level == 3:
         return Level3Config
+    if level == 35:
+        return Level35Config
     if level == 4:
         return Level4Config
     raise ValueError(f"Unsupported level: {level}")
@@ -271,6 +274,111 @@ def solve_theoretical_optimal(
         "reach_day": int(reach_day),
         "length": int(reach_day),
         "return": objective - config_cls.INIT_MONEY,
+    }
+
+
+def _extract_action_plan(v: Dict[str, Dict], config_cls) -> Tuple[List[Dict[str, Any]], int]:
+    num_days = config_cls.NUM_DAYS
+    num_nodes = config_cls.NUM_NODES
+    start = config_cls.START
+
+    def _safe_int(value) -> int:
+        if value is None:
+            return 0
+        return int(round(float(value)))
+
+    actions: List[Dict[str, Any]] = []
+
+    buy_w0 = _safe_int(pulp.value(v["buy_w"][0]))
+    buy_f0 = _safe_int(pulp.value(v["buy_f"][0]))
+    actions.append(
+        {
+            "move": int(start),
+            "mine": False,
+            "buy_water": buy_w0,
+            "buy_food": buy_f0,
+        }
+    )
+
+    reach_day = num_days
+    for t in range(1, num_days + 1):
+        loc_t = 0
+        best_loc_val = -1.0
+        for i in range(num_nodes):
+            val = pulp.value(v["loc"][i][t])
+            if val is not None and val > best_loc_val:
+                best_loc_val = float(val)
+                loc_t = int(i)
+
+        move_target = loc_t
+        best_move_val = -1.0
+        for i in range(num_nodes):
+            for j in range(num_nodes):
+                val = pulp.value(v["move"][i][j][t])
+                if val is not None and val > best_move_val:
+                    best_move_val = float(val)
+                    move_target = int(j)
+        if best_move_val < 0.5:
+            move_target = loc_t
+
+        mine_val = pulp.value(v["mine"][t])
+        buy_w = _safe_int(pulp.value(v["buy_w"][t]))
+        buy_f = _safe_int(pulp.value(v["buy_f"][t]))
+
+        actions.append(
+            {
+                "move": move_target,
+                "mine": bool(mine_val is not None and mine_val > 0.5),
+                "buy_water": buy_w,
+                "buy_food": buy_f,
+            }
+        )
+
+        r_day = pulp.value(v["reached"][t])
+        if r_day is not None and r_day > 0.5:
+            reach_day = t
+            break
+
+    return actions, int(reach_day)
+
+
+def solve_theoretical_plan(
+    level: int,
+    weather_seq: Sequence[int],
+    time_limit: int = 60,
+) -> Dict[str, Any]:
+    """求解已知天气下的理论最优并返回动作方案。"""
+    config_cls = _pick_config(level)
+    prob, v = _build_model(config_cls, weather_seq)
+
+    try:
+        solver = pulp.HiGHS(
+            msg=False,
+            timeLimit=time_limit,
+            options=["--mip_rel_gap", "0.0001", "--mip_abs_gap", "0.1"],
+        )
+    except Exception:
+        solver = pulp.PULP_CBC_CMD(msg=False, timeLimit=time_limit)
+
+    prob.solve(solver)
+
+    status_name = pulp.LpStatus.get(prob.status, "Unknown")
+
+    plan: List[Dict[str, Any]] = []
+    reach_day = config_cls.NUM_DAYS
+    if prob.status in [pulp.LpStatusOptimal, pulp.LpStatusNotSolved, pulp.LpStatusUndefined]:
+        plan, reach_day = _extract_action_plan(v, config_cls)
+
+    reached = False
+    if "reached" in v:
+        r_last = pulp.value(v["reached"][config_cls.NUM_DAYS])
+        reached = bool(r_last is not None and r_last > 0.5)
+
+    return {
+        "status": status_name,
+        "reached": reached,
+        "reach_day": int(reach_day),
+        "plan": plan,
     }
 
 

@@ -8,11 +8,13 @@ from typing import Any, Dict, List, Optional, TextIO, Tuple
 
 import numpy as np
 import torch
+import torch.nn as nn
 
 from src.env.config import CHECKPOINTS_DIR, LOGS_DIR, RESULTS_DIR, RLConfig
 from src.env.environment import make_env
 from src.models.agent import HybridRNNAgent, create_agent
 from src.models.ppo import PPOTrainer
+from src.pipeline.oracle import solve_theoretical_plan
 
 
 def _load_checkpoint(path: Path, device: str) -> Dict[str, Any]:
@@ -189,6 +191,118 @@ def _init_structured_loggers(
     return csv_file, csv_writer, tb_writer, csv_path, tb_dir
 
 
+def _sanitize_oracle_action(action: Dict[str, Any], env, valid_actions: Dict[str, Any]) -> Dict:
+    move = int(action.get("move", env.state.position))
+    valid_moves = valid_actions.get("valid_moves", []) if valid_actions else []
+    if valid_moves and move not in valid_moves:
+        move = int(env.state.position)
+
+    can_mine = bool(valid_actions.get("can_mine", False)) if valid_actions else False
+    mine = bool(action.get("mine", False)) and can_mine
+
+    if valid_actions and bool(valid_actions.get("can_buy", False)):
+        max_w = int(valid_actions.get("max_buy_water", 0))
+        max_f = int(valid_actions.get("max_buy_food", 0))
+        buy_water = max(0, min(int(action.get("buy_water", 0)), max_w))
+        buy_food = max(0, min(int(action.get("buy_food", 0)), max_f))
+    else:
+        buy_water = 0
+        buy_food = 0
+
+    return {
+        "move": move,
+        "mine": mine,
+        "buy_water": buy_water,
+        "buy_food": buy_food,
+    }
+
+
+def _oracle_warmup(
+    agent: HybridRNNAgent,
+    trainer: PPOTrainer,
+    env,
+    level: int,
+    episodes: int,
+    time_limit: int,
+    device: str,
+) -> None:
+    if episodes <= 0:
+        return
+    if level not in (3, 35, 4):
+        print("Oracle预热仅支持level 3/35/4，已跳过。")
+        return
+
+    agent.train()
+    total_loss = 0.0
+    total_steps = 0
+    solved = 0
+
+    for ep in range(episodes):
+        obs, _ = env.reset(seed=ep)
+        if env.state is None:
+            continue
+
+        weather_seq = list(env.state.weather_future)
+        oracle = solve_theoretical_plan(level, weather_seq, time_limit=time_limit)
+        plan = oracle.get("plan", [])
+        if not plan:
+            if ep % 10 == 0:
+                print(f"Oracle预热: episode={ep}, plan为空，跳过")
+            continue
+
+        solved += 1
+        episode_loss = None
+        episode_steps = 0
+
+        for oracle_action in plan:
+            valid_actions = env.get_valid_actions()
+            action = _sanitize_oracle_action(oracle_action, env, valid_actions)
+
+            obs_tensor = torch.FloatTensor(obs).unsqueeze(0).to(device)
+            state = agent.encode_observation(obs_tensor)
+            action_tensor = {
+                "move": torch.LongTensor([action["move"]]).to(device),
+                "mine": torch.FloatTensor([action["mine"]]).to(device),
+                "buy_water": torch.FloatTensor([action["buy_water"]]).to(device),
+                "buy_food": torch.FloatTensor([action["buy_food"]]).to(device),
+            }
+            log_prob, _ = agent.actor.evaluate_actions(state, action_tensor, valid_actions)
+            step_loss = -log_prob.mean()
+            episode_loss = step_loss if episode_loss is None else episode_loss + step_loss
+
+            next_obs, _, done, truncated, _ = env.step(action)
+            obs = next_obs
+            episode_steps += 1
+            if done or truncated:
+                break
+
+        if episode_loss is None or episode_steps == 0:
+            continue
+
+        trainer.optimizer.zero_grad()
+        episode_loss.backward()
+        nn.utils.clip_grad_norm_(agent.parameters(), trainer.config.MAX_GRAD_NORM)
+        trainer.optimizer.step()
+
+        total_loss += float(episode_loss.item())
+        total_steps += episode_steps
+
+        if ep % 10 == 0:
+            avg_loss = total_loss / max(1, solved)
+            avg_steps = total_steps / max(1, solved)
+            print(
+                f"Oracle预热进度: episode={ep}, solved={solved}, "
+                f"avg_steps={avg_steps:.1f}, avg_loss={avg_loss:.4f}"
+            )
+
+    avg_loss = total_loss / max(1, solved)
+    avg_steps = total_steps / max(1, solved)
+    print(
+        f"Oracle预热完成: episodes={episodes}, solved={solved}, "
+        f"avg_steps={avg_steps:.1f}, avg_loss={avg_loss:.4f}"
+    )
+
+
 def _log_structured_metrics(
     csv_writer: csv.DictWriter,
     tb_writer: Optional[Any],
@@ -242,6 +356,8 @@ def train(
     resume: Optional[str] = None,
     checkpoint_interval: int = 100,
     weather_mode: Optional[str] = None,
+    oracle_warmup_episodes: int = 0,
+    oracle_time_limit: int = 20,
 ) -> None:
     """训练入口。"""
     if device is None:
@@ -293,6 +409,20 @@ def train(
     if checkpoint is not None and "state_dict" in checkpoint and start_episode == 0:
         best_return = float(checkpoint.get("best_return", best_return))
         stats = checkpoint.get("stats")
+
+    if oracle_warmup_episodes > 0 and start_episode == 0:
+        print("开始Oracle蒸馏预热...")
+        _oracle_warmup(
+            agent,
+            trainer,
+            env,
+            level,
+            oracle_warmup_episodes,
+            oracle_time_limit,
+            device,
+        )
+    elif oracle_warmup_episodes > 0 and start_episode > 0:
+        print("已从断点恢复训练，跳过Oracle蒸馏预热。")
     rolling_window = 100
     recent_returns = deque(maxlen=rolling_window)
     recent_success = deque(maxlen=rolling_window)
@@ -505,7 +635,7 @@ def train(
     csv_file.close()
 
 
-if __name__ == "__main__":
+def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--level", type=int, default=3)
     parser.add_argument("--episodes", type=int, default=2000)
@@ -524,6 +654,18 @@ if __name__ == "__main__":
         default=None,
         help="天气模式（如 no_sandstorm/sunny_bias/hot_bias/train_easy/train_medium/eval）",
     )
+    parser.add_argument(
+        "--oracle-warmup-episodes",
+        type=int,
+        default=0,
+        help="Oracle蒸馏预热回合数（仅level 3/4，默认关闭）",
+    )
+    parser.add_argument(
+        "--oracle-time-limit",
+        type=int,
+        default=20,
+        help="Oracle求解时间上限（秒）",
+    )
     args = parser.parse_args()
 
     train(
@@ -534,4 +676,6 @@ if __name__ == "__main__":
         resume=args.resume,
         checkpoint_interval=args.checkpoint_interval,
         weather_mode=args.weather_mode,
+        oracle_warmup_episodes=args.oracle_warmup_episodes,
+        oracle_time_limit=args.oracle_time_limit,
     )
