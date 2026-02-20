@@ -440,7 +440,7 @@ def solve_and_report(prob, v, data, time_limit=300):
     path_str = " -> ".join(map(str, path))
     print(path_str)
 
-    print(f"\n购买记录 [(天, 地点, 水, 食物)]:")
+    print("\n购买记录 [(天, 地点, 水, 食物)]:")
     for t, loc, w, f in buys:
         print(f"  第{t:2d}天 [{loc}]: 水 {w} 箱, 食物 {f} 箱")
 

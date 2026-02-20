@@ -111,6 +111,7 @@ def _solve_reference(module):
 
     return float(pulp.value(prob.objective))
 
+
 @pytest.mark.slow
 def test_oracle_level1_map():
     module = _load_tool_config("level1-solved")
@@ -122,6 +123,7 @@ def test_oracle_level1_map():
     assert "reached" in result
 
     assert result["objective"] == pytest.approx(expected, abs=1e-3)
+
 
 @pytest.mark.slow
 def test_oracle_level2_map():

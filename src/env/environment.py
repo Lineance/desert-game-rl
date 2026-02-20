@@ -12,6 +12,7 @@ from src.env.config import (
     BASE_CONSUMPTION,
     Level3Config,
     Level4Config,
+    Level35Config,
     Weather,
     compute_shortest_distances,
     get_adjacency_matrix,
@@ -526,6 +527,8 @@ def make_env(level=3, **kwargs):
     """创建环境"""
     if level == 3:
         config = Level3Config
+    elif level == 35:
+        config = Level35Config
     elif level == 4:
         config = Level4Config
     else:
