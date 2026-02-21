@@ -370,7 +370,7 @@ def main():
     parser.add_argument(
         "--runs", type=int, default=1, help="运行次数（1表示单轮详细输出，>1表示统计）"
     )
-    parser.add_argument("--output", type=str, default=str(RESULTS_DIR), help="输出目录")
+    parser.add_argument("--output", type=str, default=None, help="输出目录")
     parser.add_argument("--device", type=str, default=None, help="计算设备（cuda/cpu）")
     parser.add_argument("--seed", type=int, default=42, help="随机种子（单轮模式）")
     parser.add_argument("--verbose", action="store_true", help="详细输出")
@@ -393,7 +393,8 @@ def main():
         analyze_strategy(result, env)
 
         # 导出结果
-        export_to_xlsx(result, f"{args.output}/level{args.level}_result.xlsx", args.level)
+        if args.output:
+            export_to_xlsx(result, f"{args.output}/level{args.level}_result.xlsx", args.level)
 
     else:
         # 多轮统计

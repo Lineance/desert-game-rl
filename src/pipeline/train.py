@@ -39,7 +39,7 @@ def _resolve_weather_mode(level: int, requested_mode: Optional[str]) -> str:
         preferred_default = "no_sandstorm"
     elif level == 35:
         modes = Level35Config.WEATHER_MODES
-        preferred_default = "train_medium"
+        preferred_default = "train"
     elif level == 4:
         modes = Level4Config.WEATHER_MODES
         preferred_default = "balanced"
@@ -189,6 +189,189 @@ def _compute_resume_epsilon(
     return anchor_epsilon + (eps_end - anchor_epsilon) * progress
 
 
+def _resolve_weather_split_modes(level: int, train_mode: str) -> Tuple[str, str, str]:
+    if level == 3:
+        weather_modes = Level3Config.WEATHER_MODES
+    elif level == 35:
+        weather_modes = Level35Config.WEATHER_MODES
+    elif level == 4:
+        weather_modes = Level4Config.WEATHER_MODES
+    else:
+        raise ValueError(f"Unknown level: {level}")
+
+    available = list(weather_modes.keys())
+    if not available:
+        raise ValueError("No weather modes configured")
+
+    train_key = "train" if "train" in weather_modes else train_mode
+    if train_key not in weather_modes:
+        train_key = available[0]
+
+    def _first_distinct(candidates: List[str], exclude: List[str]) -> Optional[str]:
+        for candidate in candidates:
+            if candidate in weather_modes and candidate not in exclude:
+                return candidate
+        for candidate in available:
+            if candidate not in exclude:
+                return candidate
+        return None
+
+    val_key = _first_distinct(["val", "eval", "train_medium", "balanced"], [train_key])
+    if val_key is None:
+        val_key = train_key
+
+    test_key = _first_distinct(
+        ["test", "unpredictable", "eval", "val"],
+        [train_key, val_key],
+    )
+    if test_key is None:
+        test_key = val_key
+
+    return train_key, val_key, test_key
+
+
+def _evaluate_success_rate(
+    agent: HybridRNNAgent,
+    level: int,
+    weather_mode: str,
+    episodes: int,
+    device: str,
+    seed_offset: int = 0,
+) -> float:
+    if episodes <= 0:
+        return float("nan")
+
+    was_training = bool(agent.training)
+    agent.eval()
+
+    success_count = 0
+    max_steps = None
+    for idx in range(episodes):
+        seed = int(seed_offset + idx)
+        eval_env = make_env(level=level, seed=seed, weather_mode=weather_mode)
+        obs, info = eval_env.reset(seed=seed)
+        agent.reset_hidden(device=torch.device(device))
+
+        if max_steps is None:
+            max_steps = int(eval_env.config.NUM_DAYS + 2)
+
+        done = False
+        step = 0
+        while not done and step < max_steps:
+            valid_actions = eval_env.get_valid_actions()
+            with torch.no_grad():
+                action, _ = agent.select_action(
+                    obs,
+                    valid_actions,
+                    deterministic=True,
+                    epsilon=0.0,
+                )
+            obs, _, terminated, truncated, info = eval_env.step(action)
+            done = bool(terminated or truncated)
+            step += 1
+
+        if bool(info.get("reached", False)):
+            success_count += 1
+
+    if was_training:
+        agent.train()
+
+    return success_count / max(1, episodes)
+
+
+def _compute_path_uniqueness(
+    agent: HybridRNNAgent,
+    level: int,
+    weather_mode: str,
+    n_episodes: int,
+    device: str,
+    seed_offset: int = 10_000,
+) -> float:
+    if n_episodes <= 0:
+        return float("nan")
+
+    was_training = bool(agent.training)
+    agent.eval()
+
+    paths: List[Tuple[int, ...]] = []
+    for idx in range(n_episodes):
+        seed = int(seed_offset + idx)
+        eval_env = make_env(level=level, seed=seed, weather_mode=weather_mode)
+        obs, _ = eval_env.reset(seed=seed)
+        agent.reset_hidden(device=torch.device(device))
+
+        max_steps = int(eval_env.config.NUM_DAYS + 2)
+        step = 0
+        done = False
+        move_path: List[int] = []
+        while not done and step < max_steps:
+            valid_actions = eval_env.get_valid_actions()
+            with torch.no_grad():
+                action, _ = agent.select_action(
+                    obs,
+                    valid_actions,
+                    deterministic=True,
+                    epsilon=0.0,
+                )
+            obs, _, terminated, truncated, info = eval_env.step(action)
+            executed_action = info.get("last_action") or action
+            move_path.append(int(executed_action.get("move_to", info.get("position", 0))))
+            done = bool(terminated or truncated)
+            step += 1
+
+        paths.append(tuple(move_path))
+
+    if was_training:
+        agent.train()
+
+    return len(set(paths)) / max(1, n_episodes)
+
+
+def _weather_sensitivity_test(
+    agent: HybridRNNAgent,
+    level: int,
+    weather_mode: str,
+    device: str,
+) -> bool:
+    was_training = bool(agent.training)
+    agent.eval()
+
+    probe_env = make_env(level=level, seed=20_240, weather_mode=weather_mode)
+    obs, _ = probe_env.reset(seed=20_240)
+    valid_actions = probe_env.get_valid_actions()
+
+    hot_obs = np.array(obs, dtype=np.float32, copy=True)
+    storm_obs = np.array(obs, dtype=np.float32, copy=True)
+    hot_obs[6:9] = np.array([0.0, 1.0, 0.0], dtype=np.float32)
+    storm_obs[6:9] = np.array([0.0, 0.0, 1.0], dtype=np.float32)
+
+    agent.reset_hidden(device=torch.device(device))
+    with torch.no_grad():
+        action_hot, _ = agent.select_action(
+            hot_obs,
+            valid_actions,
+            deterministic=True,
+            epsilon=0.0,
+        )
+
+    agent.reset_hidden(device=torch.device(device))
+    with torch.no_grad():
+        action_storm, _ = agent.select_action(
+            storm_obs,
+            valid_actions,
+            deterministic=True,
+            epsilon=0.0,
+        )
+
+    if was_training:
+        agent.train()
+
+    return bool(
+        int(action_hot.get("move", -1)) != int(action_storm.get("move", -1))
+        or bool(action_hot.get("mine", False)) != bool(action_storm.get("mine", False))
+    )
+
+
 def _safe_save_latest(
     save_dir: Path,
     level: int,
@@ -334,6 +517,9 @@ def train(
     oracle_time_limit: int = 20,
     curriculum: bool = False,
     curriculum_modes: Optional[str] = None,
+    eval_interval: int = 100,
+    eval_episodes: int = 50,
+    path_entropy_episodes: int = 100,
 ) -> None:
     """训练入口。"""
     if device is None:
@@ -474,6 +660,10 @@ def train(
         build_episode_stages(curriculum_stage_modes, num_episodes) if curriculum_enabled else []
     )
     current_weather_mode = initial_weather_mode
+    split_train_mode, split_val_mode, split_test_mode = _resolve_weather_split_modes(
+        level, current_weather_mode
+    )
+    print(f"评估天气分布: train={split_train_mode}, val={split_val_mode}, test={split_test_mode}")
 
     if start_episode > 0:
         derived_epsilon = _compute_resume_epsilon(
@@ -683,6 +873,78 @@ def train(
                             f"stage={current_curriculum_stage_id}, mode={current_weather_mode}, "
                             f"progress={curriculum_stage_progress * 100:.1f}%, next_episode={next_stage_episode}"
                         )
+                if stats is not None and rolling_success_rate > 0.85 and stats["entropy"] < 0.15:
+                    print("  RED FLAG: 高成功率 + 低熵，可能过拟合到特定轨迹")
+                if (
+                    stats is not None
+                    and rolling_success_rate > 0.8
+                    and stats["explained_variance"] < 0.1
+                ):
+                    print("  RED FLAG: Critic解释率低但成功率高，可能记忆轨迹而非理解")
+
+            if eval_interval > 0 and episode > 0 and episode % eval_interval == 0:
+                train_success = _evaluate_success_rate(
+                    agent,
+                    level,
+                    split_train_mode,
+                    eval_episodes,
+                    device,
+                    seed_offset=50_000 + episode * 10,
+                )
+                val_success = _evaluate_success_rate(
+                    agent,
+                    level,
+                    split_val_mode,
+                    eval_episodes,
+                    device,
+                    seed_offset=60_000 + episode * 10,
+                )
+                test_success = _evaluate_success_rate(
+                    agent,
+                    level,
+                    split_test_mode,
+                    eval_episodes,
+                    device,
+                    seed_offset=70_000 + episode * 10,
+                )
+                path_uniqueness = _compute_path_uniqueness(
+                    agent,
+                    level,
+                    split_val_mode,
+                    path_entropy_episodes,
+                    device,
+                    seed_offset=80_000 + episode * 10,
+                )
+                weather_sensitive = _weather_sensitivity_test(
+                    agent,
+                    level,
+                    split_val_mode,
+                    device,
+                )
+
+                print(
+                    "  泛化评估: "
+                    f"train={train_success:.3f}, val={val_success:.3f}, test={test_success:.3f}, "
+                    f"path_uniqueness={path_uniqueness:.3f}, weather_sensitive={weather_sensitive}"
+                )
+
+                if train_success > 0.8 and val_success < 0.5:
+                    print("  WARNING: 严重过拟合到训练天气分布！")
+                if path_uniqueness < 0.3:
+                    print("  WARNING: 路径多样性过低，LSTM可能记忆固定路径")
+                if not weather_sensitive:
+                    print("  WARNING: 策略对关键天气变化不敏感，可能过拟合")
+
+                if tb_writer is not None:
+                    tb_writer.add_scalar("eval/train_success", train_success, episode)
+                    tb_writer.add_scalar("eval/val_success", val_success, episode)
+                    tb_writer.add_scalar("eval/test_success", test_success, episode)
+                    tb_writer.add_scalar("eval/path_uniqueness", path_uniqueness, episode)
+                    tb_writer.add_scalar(
+                        "eval/weather_sensitivity",
+                        1.0 if weather_sensitive else 0.0,
+                        episode,
+                    )
 
             if checkpoint_interval > 0 and episode % checkpoint_interval == 0:
                 _save_training_state(
@@ -810,6 +1072,24 @@ def main() -> None:
         default=None,
         help="课程阶段天气模式列表，逗号分隔（如 train_easy,train_medium,eval）",
     )
+    parser.add_argument(
+        "--eval-interval",
+        type=int,
+        default=100,
+        help="训练中泛化评估间隔（episode）",
+    )
+    parser.add_argument(
+        "--eval-episodes",
+        type=int,
+        default=50,
+        help="每次train/val/test评估回合数",
+    )
+    parser.add_argument(
+        "--path-entropy-episodes",
+        type=int,
+        default=100,
+        help="路径多样性评估回合数",
+    )
     args = parser.parse_args()
 
     train(
@@ -824,4 +1104,7 @@ def main() -> None:
         oracle_time_limit=args.oracle_time_limit,
         curriculum=args.curriculum,
         curriculum_modes=args.curriculum_modes,
+        eval_interval=args.eval_interval,
+        eval_episodes=args.eval_episodes,
+        path_entropy_episodes=args.path_entropy_episodes,
     )

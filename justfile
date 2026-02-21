@@ -33,12 +33,12 @@ board:
     uv run tensorboard --logdir artifacts/logs/tensorboard --port 6006
 
 # 评估（需指定模型路径）
-eval model level="3":
-    uv run python scripts/evaluate.py {{model}} --level {{level}} --verbose
+eval model level="3" seed="42":
+    uv run python scripts/evaluate.py {{model}} --level {{level}} --verbose --seed {{seed}}
 
 # 基准测试
 bench model level="3":
-    uv run python scripts/benchmark.py {{model}} --level {{level}} --runs 100
+    uv run python scripts/benchmark.py {{model}} --level {{level}} --runs 500
 
 # 验证结果文件
 validate file level="3":
