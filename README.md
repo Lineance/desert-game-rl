@@ -24,8 +24,8 @@ task2/
 │   │   └── environment.py # POMDP环境与规则执行
 │   ├── models/
 │   │   ├── belief.py      # 天气信念模型与特征提取
-│   │   ├── agent.py       # MLP + Belief 编码策略/价值网络
-│   │   └── ppo.py         # 唯一PPO训练实现（采样+更新）
+│   │   ├── agent.py       # LSTM + Belief 时序编码策略/价值网络
+│   │   └── ppo.py         # 唯一PPO训练实现（采样+完整BPTT更新）
 │   └── pipeline/
 │       ├── train.py       # 训练核心逻辑
 │       ├── evaluate.py    # 评估与导出核心逻辑
@@ -42,10 +42,11 @@ task2/
 
 - 观测：19维
   - 状态6维 + 天气one-hot 3维 + 地点类型4维 + 信念特征6维
-- 模型：`HybridRNNAgent`（当前为 MLP 编码，不是 LSTM 主体）
-  - `state_encoder` + `belief_encoder` 拼接后送入 Actor/Critic
+- 模型：`HybridRNNAgent`（LSTM 时序编码）
+  - `state_encoder` + `belief_encoder` 拼接后送入 LSTM，再连接 Actor/Critic
 - PPO：仅在 `ppo.py` 中实现
   - 采样与更新都使用相同 `valid_actions` 掩码
+  - 按完整 episode 序列做 BPTT 更新（非 TBPTT）
   - 包含 GAE、PPO clip、value clip、entropy bonus、梯度裁剪
 
 > 详细流程见 `ARCHITECTURE.md`。

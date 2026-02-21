@@ -129,6 +129,31 @@ class RolloutBuffer:
             "dones": np.array(self.dones),
         }
 
+    def build_episode_segments(self) -> List[Dict[str, Any]]:
+        """构建完整episode序列段（用于完整BPTT）"""
+        segments: List[Dict[str, Any]] = []
+        n = len(self.observations)
+        start = 0
+
+        while start < n:
+            end = start
+            while end < n and not self.dones[end]:
+                end += 1
+            if end < n and self.dones[end]:
+                end += 1
+
+            if end > start:
+                segments.append(
+                    {
+                        "start": start,
+                        "end": end,
+                        "hidden_state": self.hidden_states[start],
+                    }
+                )
+            start = end
+
+        return segments
+
 
 class PPOTrainer:
     """PPO训练器"""
@@ -162,6 +187,10 @@ class PPOTrainer:
                     "params": agent.belief_encoder.parameters(),
                     "lr": self.config.LR_ACTOR,
                 },
+                {
+                    "params": agent.temporal_encoder.parameters(),
+                    "lr": self.config.LR_ACTOR,
+                },
             ]
         )
 
@@ -191,31 +220,16 @@ class PPOTrainer:
         )
 
         # 转换为张量
-        obs_array = np.asarray(rollout_buffer.observations, dtype=np.float32)
-        obs_tensor = torch.from_numpy(obs_array).to(self.device)
         returns_tensor = torch.FloatTensor(returns).to(self.device)
         advantages_tensor = torch.FloatTensor(advantages).to(self.device)
         old_log_probs_tensor = torch.FloatTensor(rollout_buffer.log_probs).to(self.device)
-        values_tensor = torch.FloatTensor(rollout_buffer.values).to(
-            self.device
-        )  # BUG修复6: 用于价值裁剪
+        values_tensor = torch.FloatTensor(rollout_buffer.values).to(self.device)  # 用于价值裁剪
+        episode_segments = rollout_buffer.build_episode_segments()
 
         # 归一化优势
         advantages_tensor = (advantages_tensor - advantages_tensor.mean()) / (
             advantages_tensor.std() + 1e-8
         )
-
-        # 准备动作张量
-        actions = {
-            "move": torch.LongTensor([a["move"] for a in rollout_buffer.actions]).to(self.device),
-            "mine": torch.FloatTensor([a["mine"] for a in rollout_buffer.actions]).to(self.device),
-            "buy_water": torch.FloatTensor([a["buy_water"] for a in rollout_buffer.actions]).to(
-                self.device
-            ),
-            "buy_food": torch.FloatTensor([a["buy_food"] for a in rollout_buffer.actions]).to(
-                self.device
-            ),
-        }
 
         # 多轮更新
         total_policy_loss = 0
@@ -227,38 +241,56 @@ class PPOTrainer:
         target_kl_hit = False
         max_ratio_seen = 1.0
         min_ratio_seen = 1.0
+        new_values_for_ev = values_tensor
 
         num_updates = self.config.EPOCHS_PER_UPDATE
 
-        for epoch in range(num_updates):
-            # BUG修复1 & 6: 使用存储的valid_actions，并添加价值裁剪
-
-            # 逐个处理（保证valid_actions正确性）
+        for _ in range(num_updates):
             batch_new_log_probs = []
             batch_entropy = []
             batch_new_values = []
 
-            for i in range(len(obs_tensor)):
-                obs_i = obs_tensor[i : i + 1]
-                action_i = {k: v[i : i + 1] for k, v in actions.items()}
-                valid_i = rollout_buffer.valid_actions_list[i]
+            for segment in episode_segments:
+                start = int(segment["start"])
+                end = int(segment["end"])
 
-                # 编码观测
-                state_i = self.agent.encode_observation(obs_i)
-
-                # 评估动作（传入valid_actions）
-                new_log_prob_i, entropy_i = self.agent.actor.evaluate_actions(
-                    state_i, action_i, valid_i
+                obs_segment = np.asarray(rollout_buffer.observations[start:end], dtype=np.float32)
+                obs_seq = torch.from_numpy(obs_segment).unsqueeze(0).to(self.device)
+                action_seq = {
+                    "move": torch.LongTensor(
+                        [a["move"] for a in rollout_buffer.actions[start:end]]
+                    ).to(self.device),
+                    "mine": torch.FloatTensor(
+                        [a["mine"] for a in rollout_buffer.actions[start:end]]
+                    ).to(self.device),
+                    "buy_water": torch.FloatTensor(
+                        [a["buy_water"] for a in rollout_buffer.actions[start:end]]
+                    ).to(self.device),
+                    "buy_food": torch.FloatTensor(
+                        [a["buy_food"] for a in rollout_buffer.actions[start:end]]
+                    ).to(self.device),
+                }
+                valid_seq = rollout_buffer.valid_actions_list[start:end]
+                hidden_tensor = self.agent.hidden_from_numpy(
+                    segment.get("hidden_state"), self.device
                 )
-                new_value_i = self.agent.critic(state_i).squeeze(-1)
 
-                batch_new_log_probs.append(new_log_prob_i)
-                batch_entropy.append(entropy_i)
-                batch_new_values.append(new_value_i)
+                new_log_prob_seq, entropy_seq, new_value_seq, _ = (
+                    self.agent.evaluate_actions_sequence(
+                        obs_seq,
+                        action_seq,
+                        valid_actions_seq=valid_seq,
+                        hidden_state=hidden_tensor,
+                    )
+                )
 
-            new_log_probs = torch.cat(batch_new_log_probs)
-            entropy = torch.cat(batch_entropy)
-            new_values = torch.cat(batch_new_values)
+                batch_new_log_probs.append(new_log_prob_seq)
+                batch_entropy.append(entropy_seq)
+                batch_new_values.append(new_value_seq)
+
+            new_log_probs = torch.cat(batch_new_log_probs, dim=0)
+            entropy = torch.cat(batch_entropy, dim=0)
+            new_values = torch.cat(batch_new_values, dim=0)
             old_values = values_tensor  # 用于价值裁剪
 
             # 策略损失（PPO裁剪）
@@ -307,6 +339,7 @@ class PPOTrainer:
             total_kl += approx_kl
             total_clip_fraction += clip_fraction
             effective_updates += 1
+            new_values_for_ev = new_values.detach()
 
             if approx_kl > self.config.TARGET_KL:
                 target_kl_hit = True
@@ -315,7 +348,7 @@ class PPOTrainer:
         # 返回平均统计
         n = max(1, effective_updates)
 
-        y_pred = values_tensor.detach().cpu().numpy()
+        y_pred = new_values_for_ev.cpu().numpy()
         y_true = returns_tensor.detach().cpu().numpy()
         var_y = np.var(y_true)
         explained_var = float(1.0 - np.var(y_true - y_pred) / (var_y + 1e-8))
@@ -366,6 +399,7 @@ class PPOTrainer:
         while step < max_steps:
             # 获取有效动作
             valid_actions = env.get_valid_actions()
+            hidden_before = self.agent.get_hidden_state_numpy()
 
             # 选择动作（带ε-贪婪探索）
             action, value = self.agent.select_action(obs, valid_actions, epsilon=epsilon)
@@ -404,21 +438,20 @@ class PPOTrainer:
             if bought_w > 0 or bought_f > 0:
                 buy_count += 1
 
-            # BUG修复: 直接使用全局节点ID，不要转换为局部索引
-            # 因为evaluate_actions期望的是全局ID来索引全局概率分布
-            action_idx = action  # 直接使用，不转换
+            action_idx = action
             with torch.no_grad():
                 obs_tensor = torch.FloatTensor(obs).unsqueeze(0).to(self.device)
-                states = self.agent.encode_observation(obs_tensor)
-                new_log_probs, _ = self.agent.actor.evaluate_actions(
-                    states,
+                hidden_tensor = self.agent.hidden_from_numpy(hidden_before, device=self.device)
+                new_log_probs, _, _, _ = self.agent.evaluate_actions_sequence(
+                    obs_tensor,
                     {
                         "move": torch.LongTensor([action_idx["move"]]).to(self.device),
                         "mine": torch.FloatTensor([action_idx["mine"]]).to(self.device),
                         "buy_water": torch.FloatTensor([action_idx["buy_water"]]).to(self.device),
                         "buy_food": torch.FloatTensor([action_idx["buy_food"]]).to(self.device),
                     },
-                    valid_actions,
+                    valid_actions_seq=[valid_actions],
+                    hidden_state=hidden_tensor,
                 )
                 log_prob = new_log_probs.item()
 
@@ -430,6 +463,7 @@ class PPOTrainer:
                 value,
                 log_prob,
                 done_flag,
+                hidden=hidden_before,
                 valid_actions=valid_actions,
             )
 
@@ -443,7 +477,13 @@ class PPOTrainer:
         # 获取最后状态价值（用于GAE）
         with torch.no_grad():
             obs_tensor = torch.FloatTensor(obs).unsqueeze(0).to(self.device)
-            last_value = self.agent.critic(self.agent.encode_observation(obs_tensor)).item()
+            boot = self.agent.forward_step(
+                obs_tensor,
+                valid_actions=None,
+                hidden_state=self.agent.hidden_state,
+                update_internal_hidden=False,
+            )
+            last_value = boot["value"].item()
 
         episode_info = {
             "return": episode_return,

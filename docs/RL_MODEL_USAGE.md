@@ -14,6 +14,8 @@
 - 训练器：`src/models/ppo.py`
 - 环境规则与奖励：`src/env/environment.py`
 
+当前主干编码为 **LSTM 时序编码**，PPO 更新按完整 episode 做 **完整 BPTT**（非 TBPTT）。
+
 这意味着：**策略学习依赖环境返回的奖励信号 + 训练阶段的探索/稳定化机制**，两者共同构成当前模型设计。
 
 ---

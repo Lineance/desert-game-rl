@@ -27,7 +27,7 @@
   - `environment.py`：环境动力学、合法动作集合、奖励与终止
 - `src/models/`：模型与训练器
   - `belief.py`：天气信念模型与信念特征提取
-  - `agent.py`：`HybridRNNAgent`（当前为 MLP + Belief 编码）
+  - `agent.py`：`HybridRNNAgent`（LSTM + Belief 时序编码）
   - `ppo.py`：唯一 PPO 实现（采样、GAE、更新）
 - `src/pipeline/`：流程编排
   - `train.py`：训练循环与日志输出
@@ -96,6 +96,7 @@ Actor 在前向、采样与评估时都使用该掩码：
 - `state_encoder`：编码非信念部分
 - `belief_encoder`：编码信念特征
 - 拼接后形成联合状态表示（192维）
+- `temporal_encoder (LSTM)`：对联合状态序列建模并输出时序特征
 
 ### 4.2 Actor
 
@@ -108,7 +109,7 @@ Actor 在前向、采样与评估时都使用该掩码：
 
 ### 4.3 Critic
 
-- MLP 输出状态价值 `V(s)`
+- 基于 LSTM 时序特征输出状态价值 `V(s)`
 
 ---
 
@@ -120,8 +121,8 @@ Actor 在前向、采样与评估时都使用该掩码：
 2. 读取合法动作掩码
 3. `agent.select_action()` 采样动作
 4. 环境步进
-5. 使用**同一掩码**重算动作 `log_prob` 并存入 buffer
-6. 存储 `obs/action/reward/value/log_prob/done/valid_actions`
+5. 使用**动作前 hidden state + 同一掩码**重算动作 `log_prob` 并存入 buffer
+6. 存储 `obs/action/reward/value/log_prob/done/hidden_state/valid_actions`
 
 同时采集回合行为统计：
 
@@ -141,6 +142,7 @@ Actor 在前向、采样与评估时都使用该掩码：
 
 当前更新包含：
 
+- 按完整 episode 切段做序列前向与完整 BPTT（非 TBPTT）
 - PPO clip policy loss
 - value clip loss
 - entropy bonus
@@ -161,11 +163,13 @@ Actor 在前向、采样与评估时都使用该掩码：
 定义于 `src/env/config.py` 的 `RLConfig`：
 
 - `CLIP_EPS = 0.2`
-- `LR_ACTOR = 1e-4`
+- `LR_ACTOR = 5e-5`
 - `LR_CRITIC = 2e-4`
-- `EPOCHS_PER_UPDATE = 5`
-- `TARGET_KL = 0.02`
-- `ENTROPY_COEF = 0.1`
+- `EPOCHS_PER_UPDATE = 4`
+- `TARGET_KL = 0.01`
+- `ENTROPY_COEF = 0.03`
+- `LSTM_LAYERS = 2`
+- `LSTM_HIDDEN_DIM = 256`
 
 这些参数用于抑制策略突变、降低价值发散风险，并提升训练可诊断性。
 

@@ -256,9 +256,12 @@ class RLConfig:
     """强化学习超参数"""
 
     # 网络结构
-    HIDDEN_DIM = 256  # RNN隐藏层维度
+    HIDDEN_DIM = 256  # MLP隐藏层维度
     BELIEF_DIM = 8  # 信念向量维度
     LSTM_LAYERS = 2  # LSTM层数
+    LSTM_HIDDEN_DIM = 256  # LSTM隐藏层维度
+    BATCH_FIRST = True  # LSTM使用[B, T, F]格式
+    SEQUENCE_LENGTH = 200  # 完整BPTT时的最大序列长度（按episode）
 
     # PPO参数
     GAMMA = 0.99  # 折扣因子

@@ -47,6 +47,7 @@ def _rollout_student_policy(
 ) -> Dict[str, float]:
     eval_env = make_env(level=level, weather_mode=weather_mode, seed=None)
     obs, info = eval_env.reset(seed=seed)
+    agent.reset_hidden(device=next(agent.parameters()).device)
 
     steps = 0
     mine_days = 0
@@ -158,6 +159,7 @@ def warmup_with_oracle(
             "student_success": float("nan"),
         }
         obs, _ = env.reset(seed=ep)
+        agent.reset_hidden(device=next(agent.parameters()).device)
         if env.state is None:
             if on_episode_end is not None:
                 on_episode_end(ep, dict(episode_record))
@@ -210,6 +212,7 @@ def warmup_with_oracle(
         for oracle_action in plan:
             valid_actions = env.get_valid_actions()
             action = _sanitize_oracle_action(oracle_action, env, valid_actions)
+            hidden_before = agent.get_hidden_state_numpy()
 
             pred_action, _ = agent.select_action(obs, valid_actions, deterministic=True)
             move_match = int(pred_action.get("move", env.state.position)) == int(action["move"])
@@ -236,17 +239,21 @@ def warmup_with_oracle(
             episode_total_actions += 1
 
             obs_tensor = torch.FloatTensor(obs).unsqueeze(0).to(device)
-            state = agent.encode_observation(obs_tensor)
             action_tensor = {
                 "move": torch.LongTensor([action["move"]]).to(device),
                 "mine": torch.FloatTensor([action["mine"]]).to(device),
                 "buy_water": torch.FloatTensor([action["buy_water"]]).to(device),
                 "buy_food": torch.FloatTensor([action["buy_food"]]).to(device),
             }
-            log_prob, _ = agent.actor.evaluate_actions(state, action_tensor, valid_actions)
-            value = agent.critic(state).squeeze(-1)
-            log_probs.append(log_prob.squeeze(0))
-            values.append(value.squeeze(0))
+            hidden_tensor = agent.hidden_from_numpy(hidden_before, device=torch.device(device))
+            log_prob_seq, _, value_seq, _ = agent.evaluate_actions_sequence(
+                obs_tensor,
+                action_tensor,
+                valid_actions_seq=[valid_actions],
+                hidden_state=hidden_tensor,
+            )
+            log_probs.append(log_prob_seq[0])
+            values.append(value_seq[0])
 
             next_obs, reward, done, truncated, _ = env.step(action)
             last_action = env.state.last_action if env.state is not None else None

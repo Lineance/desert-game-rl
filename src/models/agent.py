@@ -213,29 +213,137 @@ class HybridRNNAgent(nn.Module):
             nn.ReLU(),
         )
 
-        # 组合维度: 128 + 64 = 192
-        combined_dim = 192
+        self.combined_input_dim = 192
+        self.lstm_hidden_dim = int(getattr(config, "LSTM_HIDDEN_DIM", config.HIDDEN_DIM))
+        self.batch_first = bool(getattr(config, "BATCH_FIRST", True))
 
-        self.actor = ActorNetwork(combined_dim, config.HIDDEN_DIM, num_locations)
-        self.critic = CriticNetwork(combined_dim, config.HIDDEN_DIM)
+        self.temporal_encoder = nn.LSTM(
+            input_size=self.combined_input_dim,
+            hidden_size=self.lstm_hidden_dim,
+            num_layers=int(config.LSTM_LAYERS),
+            batch_first=self.batch_first,
+        )
 
-    def encode_observation(self, obs: torch.Tensor) -> torch.Tensor:
-        """编码观测"""
-        # 拆分：前部分状态 + 后部分信念
-        state_part = obs[:, : -self.belief_dim]
-        belief_part = obs[:, -self.belief_dim :]
+        self.actor = ActorNetwork(self.lstm_hidden_dim, config.HIDDEN_DIM, num_locations)
+        self.critic = CriticNetwork(self.lstm_hidden_dim, config.HIDDEN_DIM)
 
+        self.hidden_state: Optional[Tuple[torch.Tensor, torch.Tensor]] = None
+
+    def _encode_parts(self, obs_2d: torch.Tensor) -> torch.Tensor:
+        state_part = obs_2d[:, : -self.belief_dim]
+        belief_part = obs_2d[:, -self.belief_dim :]
         state_encoded = self.state_encoder(state_part)
         belief_encoded = self.belief_encoder(belief_part)
+        return torch.cat([state_encoded, belief_encoded], dim=-1)
 
-        combined = torch.cat([state_encoded, belief_encoded], dim=-1)
-        return combined
+    def _to_sequence(self, obs: torch.Tensor) -> torch.Tensor:
+        if obs.dim() == 1:
+            obs = obs.unsqueeze(0).unsqueeze(0)
+        elif obs.dim() == 2:
+            obs = obs.unsqueeze(1)
+        elif obs.dim() != 3:
+            raise ValueError(f"obs维度不支持: {tuple(obs.shape)}")
+        return obs
+
+    def hidden_from_numpy(
+        self,
+        hidden_state: Optional[Tuple[np.ndarray, np.ndarray]],
+        device: Optional[torch.device] = None,
+    ) -> Optional[Tuple[torch.Tensor, torch.Tensor]]:
+        if hidden_state is None:
+            return None
+        if device is None:
+            device = next(self.parameters()).device
+        h, c = hidden_state
+        return (
+            torch.from_numpy(np.asarray(h)).float().to(device),
+            torch.from_numpy(np.asarray(c)).float().to(device),
+        )
+
+    def get_hidden_state_numpy(self) -> Optional[Tuple[np.ndarray, np.ndarray]]:
+        if self.hidden_state is None:
+            return None
+        h, c = self.hidden_state
+        return h.detach().cpu().numpy().copy(), c.detach().cpu().numpy().copy()
+
+    def encode_sequence(
+        self,
+        obs: torch.Tensor,
+        hidden_state: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+    ) -> Tuple[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+        obs_seq = self._to_sequence(obs)
+        batch_size, seq_len, feat_dim = obs_seq.shape
+        flat_obs = obs_seq.reshape(batch_size * seq_len, feat_dim)
+        encoded_flat = self._encode_parts(flat_obs)
+        encoded_seq = encoded_flat.reshape(batch_size, seq_len, -1)
+
+        if hidden_state is None:
+            hidden_state = self.hidden_state
+
+        outputs, next_hidden = self.temporal_encoder(encoded_seq, hidden_state)
+        return outputs, next_hidden
+
+    def encode_observation(self, obs: torch.Tensor) -> torch.Tensor:
+        """兼容接口：返回最后时间步的时序特征"""
+        outputs, _ = self.encode_sequence(obs, hidden_state=None)
+        return outputs[:, -1, :]
+
+    def forward_step(
+        self,
+        obs: torch.Tensor,
+        valid_actions: Optional[Dict] = None,
+        hidden_state: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+        update_internal_hidden: bool = False,
+    ):
+        outputs, next_hidden = self.encode_sequence(obs, hidden_state=hidden_state)
+        step_features = outputs[:, -1, :]
+        action_dist = self.actor(step_features, valid_actions)
+        value = self.critic(step_features)
+        if update_internal_hidden:
+            self.hidden_state = (next_hidden[0].detach(), next_hidden[1].detach())
+        return {"action_dist": action_dist, "value": value, "next_hidden": next_hidden}
 
     def forward(self, obs: torch.Tensor, valid_actions: Optional[Dict] = None):
-        state = self.encode_observation(obs)
-        action_dist = self.actor(state, valid_actions)
-        value = self.critic(state)
-        return {"action_dist": action_dist, "value": value}
+        return self.forward_step(obs, valid_actions, update_internal_hidden=False)
+
+    def evaluate_actions_sequence(
+        self,
+        obs_seq: torch.Tensor,
+        actions: Dict[str, torch.Tensor],
+        valid_actions_seq: Optional[list] = None,
+        hidden_state: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+        outputs, next_hidden = self.encode_sequence(obs_seq, hidden_state=hidden_state)
+        values = self.critic(outputs).squeeze(-1)
+
+        if outputs.size(0) != 1:
+            raise ValueError("当前evaluate_actions_sequence仅支持batch_size=1")
+
+        log_probs = []
+        entropies = []
+        seq_len = outputs.size(1)
+
+        for t in range(seq_len):
+            feat_t = outputs[:, t, :]
+            action_t = {
+                "move": actions["move"][t : t + 1],
+                "mine": actions["mine"][t : t + 1],
+                "buy_water": actions["buy_water"][t : t + 1],
+                "buy_food": actions["buy_food"][t : t + 1],
+            }
+            valid_t = None
+            if valid_actions_seq is not None and t < len(valid_actions_seq):
+                valid_t = valid_actions_seq[t]
+            lp_t, ent_t = self.actor.evaluate_actions(feat_t, action_t, valid_t)
+            log_probs.append(lp_t.squeeze(0))
+            entropies.append(ent_t.squeeze(0))
+
+        return (
+            torch.stack(log_probs),
+            torch.stack(entropies),
+            values.squeeze(0),
+            next_hidden,
+        )
 
     @staticmethod
     def _day0_purchase_floor(valid_actions: Optional[Dict]) -> Tuple[int, int]:
@@ -262,7 +370,7 @@ class HybridRNNAgent(nn.Module):
 
         with torch.no_grad():
             obs_tensor = torch.FloatTensor(obs).unsqueeze(0).to(next(self.parameters()).device)
-            output = self.forward(obs_tensor, valid_actions)
+            output = self.forward_step(obs_tensor, valid_actions, update_internal_hidden=True)
 
             if not deterministic and np.random.random() < epsilon:
                 if valid_actions is not None and "valid_moves" in valid_actions:
@@ -313,8 +421,48 @@ class HybridRNNAgent(nn.Module):
                     "buy_food": buy_food,
                 }
             else:
-                state = self.encode_observation(obs_tensor)
-                action, _ = self.actor.sample_action(state, valid_actions)
+                dist = output["action_dist"]
+
+                move_dist = torch.distributions.Categorical(dist["move_probs"])
+                move_global_id = move_dist.sample().item()
+
+                mine_dist = torch.distributions.Categorical(dist["mine_probs"])
+                mine_action = mine_dist.sample().item() == 1
+
+                max_buy_water = (
+                    int(valid_actions.get("max_buy_water", 100))
+                    if valid_actions is not None
+                    else 100
+                )
+                max_buy_food = (
+                    int(valid_actions.get("max_buy_food", 100))
+                    if valid_actions is not None
+                    else 100
+                )
+                can_buy = (
+                    bool(valid_actions.get("can_buy", True)) if valid_actions is not None else True
+                )
+
+                if can_buy:
+                    water_dist = torch.distributions.Normal(
+                        dist["buy_water_mean"], dist["buy_water_std"]
+                    )
+                    buy_water = int(torch.clamp(water_dist.sample(), 0, max_buy_water).item())
+
+                    food_dist = torch.distributions.Normal(
+                        dist["buy_food_mean"], dist["buy_food_std"]
+                    )
+                    buy_food = int(torch.clamp(food_dist.sample(), 0, max_buy_food).item())
+                else:
+                    buy_water = 0
+                    buy_food = 0
+
+                action = {
+                    "move": move_global_id,
+                    "mine": mine_action,
+                    "buy_water": buy_water,
+                    "buy_food": buy_food,
+                }
 
                 # 第0天设置采购下限，避免低资源早死局部最优
                 can_buy = (
@@ -332,8 +480,14 @@ class HybridRNNAgent(nn.Module):
         return action, value
 
     def reset_hidden(self, batch_size: int = 1, device: Optional[torch.device] = None):
-        """兼容RNN接口，实际MLP无需状态"""
-        pass
+        """重置LSTM隐藏状态"""
+        if device is None:
+            device = next(self.parameters()).device
+        layers = int(self.config.LSTM_LAYERS)
+        hidden_dim = int(self.lstm_hidden_dim)
+        h0 = torch.zeros(layers, batch_size, hidden_dim, device=device)
+        c0 = torch.zeros(layers, batch_size, hidden_dim, device=device)
+        self.hidden_state = (h0, c0)
 
     def save(self, path: Union[str, PathLike[str]]):
         torch.save(
