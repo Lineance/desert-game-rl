@@ -47,10 +47,12 @@ def run_episode(
     while not done and step < 200:
         # 选择动作
         valid_actions = env.get_valid_actions()
-        action, value = agent.select_action(obs, valid_actions, deterministic=deterministic)
+        with torch.no_grad():
+            action, value = agent.select_action(obs, valid_actions, deterministic=deterministic)
 
         # 执行动作
         next_obs, reward, done, truncated, next_info = env.step(action)
+        done = done or truncated
 
         executed_action = next_info.get("last_action") or action
         record = {
@@ -203,10 +205,11 @@ def format_action(action: Dict, position: int) -> str:
         else:
             parts.append(f"移动 {move_from + 1}->{move_to + 1}")
     elif "move" in action:
-        if action["move"] == position - 1:
+        move_target = action.get("move", position - 1)
+        if move_target == position - 1:
             parts.append("停留")
         else:
-            parts.append(f"移动 {position}->{action['move'] + 1}")
+            parts.append(f"移动 {position}->{move_target + 1}")
     else:
         parts.append("停留")
 
@@ -215,8 +218,10 @@ def format_action(action: Dict, position: int) -> str:
         parts.append("挖矿")
 
     # 购买
-    if action.get("buy_water", 0) > 0 or action.get("buy_food", 0) > 0:
-        parts.append(f"购买(水{action['buy_water']}食{action['buy_food']})")
+    buy_water = action.get("buy_water", 0)
+    buy_food = action.get("buy_food", 0)
+    if buy_water > 0 or buy_food > 0:
+        parts.append(f"购买(水{buy_water}食{buy_food})")
 
     return "+".join(parts)
 
@@ -237,11 +242,12 @@ def analyze_strategy(result: Dict, env):
         print(f"    挖矿日期: {mine_days}")
 
     # 统计购买
-    buy_records = [
-        (r["day"], r["action"]["buy_water"], r["action"]["buy_food"])
-        for r in records
-        if r["action"].get("buy_water", 0) > 0 or r["action"].get("buy_food", 0) > 0
-    ]
+    buy_records = []
+    for r in records:
+        buy_water = r["action"].get("buy_water", 0)
+        buy_food = r["action"].get("buy_food", 0)
+        if buy_water > 0 or buy_food > 0:
+            buy_records.append((r["day"], buy_water, buy_food))
     print(f"  购买次数: {len(buy_records)}")
     for day, w, f in buy_records:
         print(f"    第{day}天: 水{w}, 食物{f}")

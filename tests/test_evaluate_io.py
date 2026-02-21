@@ -4,6 +4,7 @@ import sys
 import pandas as pd
 
 from src.pipeline.evaluate import (
+    analyze_strategy,
     export_to_csv,
     export_to_xlsx,
     format_action,
@@ -229,3 +230,76 @@ def test_run_episode_verbose_prints(capsys):
 
     assert "Day 1" in output
     assert result["length"] == 1
+
+
+def test_run_episode_terminates_on_truncated_and_uses_no_grad():
+    import numpy as np
+    import torch
+
+    class _FakeAgent:
+        def parameters(self):
+            return iter([torch.nn.Parameter(torch.zeros(1))])
+
+        def reset_hidden(self, device=None):
+            return None
+
+        def select_action(self, obs, valid_actions, deterministic=True):
+            assert torch.is_grad_enabled() is False
+            return {"move": 0, "mine": False}, 0.1
+
+    class _FakeEnv:
+        def __init__(self):
+            self.calls = 0
+
+        def reset(self, seed=None):
+            return np.zeros(1), {"day": 0}
+
+        def get_valid_actions(self):
+            return {"valid_moves": [0], "can_mine": False, "can_buy": False}
+
+        def step(self, action):
+            self.calls += 1
+            info = {
+                "action_day": 1,
+                "day": 1,
+                "position": 0,
+                "money": 100.0,
+                "water": 1,
+                "food": 2,
+                "weather_today": 0,
+                "belief": np.zeros(2),
+                "last_action": {"move": 0, "mine": False},
+            }
+            return np.zeros(1), 1.0, False, True, info
+
+    env = _FakeEnv()
+    result = run_episode(_FakeAgent(), env, seed=0, deterministic=True, verbose=False)
+
+    assert env.calls == 1
+    assert result["length"] == 1
+
+
+def test_format_action_and_analyze_strategy_handle_missing_buy_keys(capsys):
+    action = {"move_from": 0, "move_to": 0, "mine": True}
+    text = format_action(action, position=1)
+    assert text == "停留+挖矿"
+
+    result = {
+        "records": [
+            {
+                "day": 1,
+                "position": 1,
+                "money": 100.0,
+                "water": 1,
+                "food": 1,
+                "weather": "晴朗",
+                "action": {"mine": False},
+            }
+        ],
+        "reached": False,
+        "final_money": 100.0,
+    }
+
+    analyze_strategy(result, env=None)
+    out = capsys.readouterr().out
+    assert "购买次数: 0" in out
