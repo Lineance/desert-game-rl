@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from typing import Any, Callable, Dict, List, Optional
 
 import torch
@@ -95,6 +96,7 @@ def warmup_with_oracle(
     on_episode_end: Optional[Callable[[int, Dict[str, float]], None]] = None,
     trajectory_filter: Optional[Callable[[Dict[str, Any]], bool]] = None,
     oracle_config: Optional[Any] = None,
+    oracle_solve_interval: int = 1,
 ) -> Dict[str, float]:
     if episodes <= 0:
         return {
@@ -111,6 +113,11 @@ def warmup_with_oracle(
             "match_rate": 0.0,
             "accepted_episodes": 0.0,
             "filtered_episodes": 0.0,
+            "oracle_solve_calls": 0.0,
+            "oracle_reuse_calls": 0.0,
+            "oracle_fallback_calls": 0.0,
+            "oracle_solve_time_sec": 0.0,
+            "oracle_discarded_unreached": 0.0,
         }
     if level not in (3, 35, 4):
         print("Oracle预热仅支持level 3/35/4，已跳过。")
@@ -128,6 +135,11 @@ def warmup_with_oracle(
             "match_rate": 0.0,
             "accepted_episodes": 0.0,
             "filtered_episodes": 0.0,
+            "oracle_solve_calls": 0.0,
+            "oracle_reuse_calls": 0.0,
+            "oracle_fallback_calls": 0.0,
+            "oracle_solve_time_sec": 0.0,
+            "oracle_discarded_unreached": 0.0,
         }
 
     agent.train()
@@ -149,6 +161,14 @@ def warmup_with_oracle(
     student_eval_episodes = 0
     accepted_episodes = 0
     filtered_episodes = 0
+    oracle_solve_calls = 0
+    oracle_reuse_calls = 0
+    oracle_fallback_calls = 0
+    oracle_solve_time_sec = 0.0
+    oracle_discarded_unreached = 0
+    oracle_discarded_since_log = 0
+    solve_interval = max(1, int(oracle_solve_interval))
+    last_plan: List[Dict[str, Any]] = []
 
     weather_mode = str(getattr(env, "weather_mode", "balanced"))
 
@@ -198,15 +218,42 @@ def warmup_with_oracle(
                 episode_record["student_success"] = float("nan")
 
         weather_seq = list(env.state.weather_future)
-        if oracle_config is None:
-            oracle = solve_theoretical_plan(level, weather_seq, time_limit=time_limit)
+        should_solve = (not last_plan) or (((ep - start_episode) % solve_interval) == 0)
+        if should_solve:
+            oracle_solve_calls += 1
+            solve_start = time.perf_counter()
+            try:
+                if oracle_config is None:
+                    oracle = solve_theoretical_plan(level, weather_seq, time_limit=time_limit)
+                else:
+                    oracle = solve_theoretical_plan_with_config(
+                        oracle_config,
+                        weather_seq,
+                        time_limit=time_limit,
+                    )
+            except Exception as solve_error:
+                oracle_fallback_calls += 1
+                print(
+                    "Oracle自定义求解失败，回退到标准level求解: "
+                    f"episode={ep}, error={type(solve_error).__name__}: {solve_error}"
+                )
+                oracle = solve_theoretical_plan(level, weather_seq, time_limit=time_limit)
+            oracle_solve_time_sec += max(0.0, time.perf_counter() - solve_start)
+            plan = oracle.get("plan", [])
+            oracle_reached = bool(oracle.get("reached", False))
+            if plan and not oracle_reached:
+                oracle_discarded_unreached += 1
+                oracle_discarded_since_log += 1
+                plan = []
+            if plan:
+                last_plan = list(plan)
+            elif last_plan:
+                oracle_reuse_calls += 1
+                plan = list(last_plan)
         else:
-            oracle = solve_theoretical_plan_with_config(
-                oracle_config,
-                weather_seq,
-                time_limit=time_limit,
-            )
-        plan = oracle.get("plan", [])
+            oracle_reuse_calls += 1
+            plan = list(last_plan)
+
         if not plan:
             if ep % log_interval == 0:
                 print(f"Oracle预热: episode={ep}, plan为空，跳过")
@@ -406,13 +453,23 @@ def warmup_with_oracle(
             student_avg_steps = student_total_steps / max(1, student_eval_episodes)
             student_avg_mine = student_total_mine_days / max(1, student_eval_episodes)
             student_success_rate = student_success / max(1, student_eval_episodes)
+            avg_oracle_solve_sec = oracle_solve_time_sec / max(1, oracle_solve_calls)
             print(
                 f"Oracle预热进度: episode={ep}, solved={solved}, "
                 f"avg_steps={avg_steps:.1f}, avg_mine={avg_mine:.2f}, "
                 f"match_rate={match_rate:.2%}, avg_loss={avg_loss:.4f}; "
                 f"student(avg_steps={student_avg_steps:.1f}, avg_mine={student_avg_mine:.2f}, "
-                f"success={student_success_rate:.2%}, eval_points={student_eval_episodes})"
+                f"success={student_success_rate:.2%}, eval_points={student_eval_episodes}); "
+                f"oracle(solve_calls={oracle_solve_calls}, reuse={oracle_reuse_calls}, "
+                f"fallback={oracle_fallback_calls}, discard_unreached={oracle_discarded_unreached}, "
+                f"avg_solve_sec={avg_oracle_solve_sec:.3f})"
             )
+            if oracle_discarded_since_log > 0:
+                print(
+                    "Oracle告警统计: "
+                    f"最近{log_interval}回合丢弃未到达终点求解 {oracle_discarded_since_log} 次"
+                )
+                oracle_discarded_since_log = 0
 
         if env.state is not None and bool(env.state.reached):
             success += 1
@@ -435,6 +492,7 @@ def warmup_with_oracle(
     student_avg_buy_water = student_total_buy_water / max(1, student_eval_episodes)
     student_avg_buy_food = student_total_buy_food / max(1, student_eval_episodes)
     student_success_rate = student_success / max(1, student_eval_episodes)
+    avg_oracle_solve_sec = oracle_solve_time_sec / max(1, oracle_solve_calls)
     print(
         f"Oracle预热完成: episodes={episodes}, solved={solved}, "
         f"success_rate={success_rate:.2%}, avg_steps={avg_steps:.1f}, "
@@ -442,7 +500,10 @@ def warmup_with_oracle(
         f"avg_buy_f={avg_buy_food:.1f}, match_rate={match_rate:.2%}, avg_loss={avg_loss:.4f}; "
         f"student(success_rate={student_success_rate:.2%}, avg_steps={student_avg_steps:.1f}, "
         f"avg_mine={student_avg_mine:.2f}, avg_buy_w={student_avg_buy_water:.1f}, "
-        f"avg_buy_f={student_avg_buy_food:.1f})"
+        f"avg_buy_f={student_avg_buy_food:.1f}); "
+        f"oracle(solve_calls={oracle_solve_calls}, reuse={oracle_reuse_calls}, "
+        f"fallback={oracle_fallback_calls}, discard_unreached={oracle_discarded_unreached}, "
+        f"avg_solve_sec={avg_oracle_solve_sec:.3f})"
     )
 
     return {
@@ -459,6 +520,11 @@ def warmup_with_oracle(
         "match_rate": float(match_rate),
         "accepted_episodes": float(accepted_episodes),
         "filtered_episodes": float(filtered_episodes),
+        "oracle_solve_calls": float(oracle_solve_calls),
+        "oracle_reuse_calls": float(oracle_reuse_calls),
+        "oracle_fallback_calls": float(oracle_fallback_calls),
+        "oracle_solve_time_sec": float(oracle_solve_time_sec),
+        "oracle_discarded_unreached": float(oracle_discarded_unreached),
         "student_success_rate": float(student_success_rate),
         "student_avg_steps": float(student_avg_steps),
         "student_avg_mine_per_episode": float(student_avg_mine),

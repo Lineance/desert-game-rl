@@ -23,13 +23,13 @@ def test_build_stage_specs_fallback_start_node():
     cfg = PipelineConfig(stage1_start_node_one_based=99)
     stages = build_stage_specs(cfg)
     assert len(stages) == 3
-    assert stages[0].start_node_one_based == 11
+    assert stages[0].start_node_one_based == 18
 
 
 def test_build_edges_removes_target_edges():
-    edges = _build_edges([(13, 2), (1, 2)])
-    assert (2, 13) not in edges
-    assert (1, 2) not in edges
+    edges = _build_edges([(3, 4), (18, 19)])
+    assert (3, 4) not in edges
+    assert (18, 19) not in edges
 
 
 def test_stage_override_applies_core_fields():
@@ -38,11 +38,12 @@ def test_stage_override_applies_core_fields():
         name="mine_survival",
         init_money=3000,
         num_days=30,
-        start_node_one_based=11,
+        start_node_one_based=18,
         villages_one_based=[],
-        removed_edges_one_based=[(2, 13)],
-        weather_mode="train_easy",
+        removed_edges_one_based=[(3, 4)],
+        weather_mode="balanced",
         warmup_episodes=10,
+        warmup_oracle_interval=2,
         max_rl_episodes=10,
         min_rl_episodes=5,
         eval_interval=5,
@@ -53,9 +54,9 @@ def test_stage_override_applies_core_fields():
 
     override = _stage_override(stage)
     assert override["INIT_MONEY"] == 3000
-    assert override["START"] == 10
-    assert override["MINES"] == [10]
-    assert (2, 13) not in override["EDGES"]
+    assert override["START"] == 17
+    assert override["MINES"] == [17]
+    assert (3, 4) not in override["EDGES"]
 
 
 def test_compute_epsilon_schedule():
@@ -74,8 +75,8 @@ def test_stage_episode_epsilon_reset_for_new_stage():
 
 
 def test_node3_to_mine_choice_cases():
-    assert _node3_to_mine_choice([0, 2, 5, 6]) == 1.0
-    assert _node3_to_mine_choice([0, 2, 4, 6]) == 0.0
+    assert _node3_to_mine_choice([0, 2, 7, 8]) == 1.0
+    assert _node3_to_mine_choice([0, 2, 3, 8]) == 0.0
     assert _node3_to_mine_choice([0, 1, 4]) is None
 
 
@@ -112,8 +113,9 @@ def test_stage_metrics_and_criteria():
         start_node_one_based=1,
         villages_one_based=[7],
         removed_edges_one_based=[],
-        weather_mode="eval",
+        weather_mode="balanced",
         warmup_episodes=0,
+        warmup_oracle_interval=1,
         max_rl_episodes=10,
         min_rl_episodes=5,
         eval_interval=5,
@@ -137,7 +139,7 @@ def test_warn_level35_trap():
 
 
 def test_stage2_warmup_filter():
-    assert _stage2_warmup_filter({"path_history": [0, 5, 10, 12]})
+    assert _stage2_warmup_filter({"path_history": [0, 5, 17, 12]})
     assert not _stage2_warmup_filter({"path_history": [0, 1, 2]})
     assert not _stage2_warmup_filter({"path_history": "invalid"})
 
@@ -151,8 +153,9 @@ def test_should_relax_stage2_warmup():
         start_node_one_based=1,
         villages_one_based=[],
         removed_edges_one_based=[],
-        weather_mode="train_medium",
+        weather_mode="balanced",
         warmup_episodes=10,
+        warmup_oracle_interval=1,
         max_rl_episodes=10,
         min_rl_episodes=5,
         eval_interval=5,

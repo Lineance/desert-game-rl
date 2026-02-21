@@ -45,3 +45,25 @@ def test_make_env_accepts_config_override():
     assert env.config.INIT_MONEY == 3000
     assert env.config.START == 10
     assert env.config.VILLAGES == []
+
+
+def test_make_env_normalizes_invalid_weather_probs():
+    env = make_env(
+        level=4,
+        weather_mode="broken",
+        seed=0,
+        config_override={
+            "CONFIG_NAME": "BrokenWeather",
+            "WEATHER_MODES": {"broken": [0.4, 0.4, 0.1]},
+            "WEATHER_TRANSITION": [
+                [0.24, 0.5, 0.25],
+                [0.35, 0.34, 0.21],
+                [0.33, 0.5, 0.17],
+            ],
+        },
+    )
+
+    obs, info = env.reset(seed=0)
+    assert obs is not None
+    assert isinstance(info, dict)
+    assert len(env.state.weather_future) == env.config.NUM_DAYS

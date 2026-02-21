@@ -46,7 +46,7 @@ def _get_adjacency_cached(
 
 def _safe_worker_threads() -> int:
     cpu = os.cpu_count() or 1
-    return max(1, min(int(cpu), 8))
+    return max(1, min(int(cpu), 20))
 
 
 def _default_solver_options(*, fast: bool) -> List[str]:

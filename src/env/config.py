@@ -180,8 +180,8 @@ class Level35Config:
 class Level4Config:
     """第四关参数"""
 
-    NUM_NODES = 25  # 节点数（通常比第三关大）
-    NUM_DAYS = 30  # 截止日期更长
+    NUM_NODES = 25  # 节点数
+    NUM_DAYS = 30  # 截止日期
     INIT_MONEY = 10000
     WEIGHT_LIMIT = 1200
     MINE_INCOME = 1000
@@ -240,16 +240,15 @@ class Level4Config:
 
     # 天气模式
     WEATHER_MODES = {
-        "balanced": [0.35, 0.35, 0.30],
-        "unpredictable": [0.33, 0.33, 0.34],  # 更难预测
+        "balanced": [0.45, 0.45, 0.1],
     }
 
-    # 更随机的天气转移
+    # 天气转移
     WEATHER_TRANSITION = np.array(
         [
-            [0.4, 0.35, 0.25],
-            [0.35, 0.4, 0.25],
-            [0.35, 0.35, 0.3],
+            [0.24, 0.5, 0.25],
+            [0.35, 0.34, 0.21],
+            [0.33, 0.5, 0.17],
         ]
     )
 

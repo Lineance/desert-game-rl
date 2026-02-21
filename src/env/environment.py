@@ -42,6 +42,20 @@ def _build_runtime_config(base_config: Any, config_override: Optional[Mapping[st
     return type(str(safe_name), (), attributes)
 
 
+def _normalize_probs(probs: List[float]) -> np.ndarray:
+    arr = np.asarray(probs, dtype=np.float64).reshape(-1)
+    if arr.size != 3:
+        arr = np.array([1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0], dtype=np.float64)
+    arr = np.where(np.isfinite(arr), arr, 0.0)
+    arr = np.maximum(arr, 0.0)
+    total = float(arr.sum())
+    if total <= 0.0:
+        arr = np.array([1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0], dtype=np.float64)
+    else:
+        arr = arr / total
+    return arr
+
+
 @dataclass
 class State:
     """环境状态"""
@@ -129,12 +143,16 @@ class DesertCrossingEnv:
         else:
             probs = [0.5, 0.5, 0.0]  # 第三关默认无沙暴
 
+        init_probs = _normalize_probs(list(probs))
+        transition = np.asarray(self.config.WEATHER_TRANSITION, dtype=np.float64)
+
         sequence = []
-        current = self.rng.choice(3, p=probs)
+        current = int(self.rng.choice(3, p=init_probs))
 
         for _ in range(self.config.NUM_DAYS):
             sequence.append(current)
-            current = self.rng.choice(3, p=self.config.WEATHER_TRANSITION[current])
+            next_probs = _normalize_probs(list(transition[current]))
+            current = int(self.rng.choice(3, p=next_probs))
 
         return sequence
 

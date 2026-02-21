@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import torch
 
-from src.env.config import CHECKPOINTS_DIR, RESULTS_DIR, Level35Config, RLConfig
+from src.env.config import CHECKPOINTS_DIR, RESULTS_DIR, Level4Config, RLConfig
 from src.env.environment import make_env
 from src.models.agent import HybridRNNAgent, create_agent
 from src.models.ppo import PPOTrainer
@@ -37,6 +37,7 @@ class StageSpec:
     removed_edges_one_based: Sequence[Tuple[int, int]]
     weather_mode: str
     warmup_episodes: int
+    warmup_oracle_interval: int
     max_rl_episodes: int
     min_rl_episodes: int
     eval_interval: int
@@ -47,46 +48,84 @@ class StageSpec:
 
 @dataclass
 class PipelineConfig:
-    level: int = 35
+    level: int = 4
     device: Optional[str] = None
     seed: int = 42
     log_interval: int = 20
     checkpoint_interval: int = 100
     oracle_time_limit: int = 5
+    oracle_warmup_time_limit: int = 5
     epsilon_start: float = 0.30
     epsilon_end: float = 0.05
     epsilon_decay_ratio: float = 0.70
     stage2_min_warmup_accepted: int = 50
     stage2_relaxed_extra_episodes: int = 120
-    stage1_start_node_one_based: int = 11
+    stage1_start_node_one_based: int = 18
     output_prefix: str = "level4_pipeline"
 
 
-FULL_MAP_EDGES_ONE_BASED: List[Tuple[int, int]] = list(Level35Config.EDGES)
-COMMON_REMOVED_EDGES_ONE_BASED: List[Tuple[int, int]] = [
-    (2, 13),
-    (1, 2),
+FULL_MAP_EDGES_ONE_BASED: List[Tuple[int, int]] = list(Level4Config.EDGES)
+
+# Stage1（矿山生存）：限制矿区到终点侧的直连走廊，强调先挖矿再规划离开。
+STAGE1_REMOVED_EDGES_ONE_BASED: List[Tuple[int, int]] = [
+    # 右三角 block 3 4 5 9 10 15
+    (4, 9),
+    (9, 10),
+    (10, 15),
+    # 下三角 block 11 16 17 21 22 23
+    (16, 21),
+    (12, 17),
+    (18, 17),
+    (22, 23),
+    (11, 16),
+    (18, 23),
+    (23, 24),
+    # OPEN LATTER
+    (13, 12),
+    (13, 8),
+    (6, 11),
+    (11, 12),
     (2, 3),
-    (3, 4),
+    (3, 8),
+]
+
+# Stage2（寻矿路径）：削弱主路径直行，强化从起点向矿区分支
+STAGE2_REMOVED_EDGES_ONE_BASED: List[Tuple[int, int]] = [
+    # 右三角 block 3 4 5 9 10 15
+    (4, 9),
+    (9, 10),
+    (10, 15),
+    # 下三角 block 11 16 17 21 22 23
+    (16, 21),
+    (12, 17),
+    (18, 17),
+    (22, 23),
+    (11, 16),
+    (18, 23),
+    (23, 24),
+    # OPEN LATTER
+    (6, 11),
+    (11, 12),
+    (2, 3),
+    (3, 8),
 ]
 
 
 def build_stage_specs(cfg: PipelineConfig) -> List[StageSpec]:
-    stage1_start = (
-        11 if cfg.stage1_start_node_one_based not in (10, 11) else cfg.stage1_start_node_one_based
-    )
+    stage1_start = 13
 
     return [
         StageSpec(
             stage_id=1,
             name="mine_survival",
-            init_money=3000,
+            init_money=5000,
             num_days=30,
             start_node_one_based=stage1_start,
-            villages_one_based=[],
-            removed_edges_one_based=COMMON_REMOVED_EDGES_ONE_BASED,
-            weather_mode="train_easy",
-            warmup_episodes=220,
+            villages_one_based=[14],
+            removed_edges_one_based=STAGE1_REMOVED_EDGES_ONE_BASED,
+            weather_mode="balanced",
+            warmup_episodes=350,
+            warmup_oracle_interval=4,
             max_rl_episodes=700,
             min_rl_episodes=120,
             eval_interval=20,
@@ -108,9 +147,10 @@ def build_stage_specs(cfg: PipelineConfig) -> List[StageSpec]:
             num_days=30,
             start_node_one_based=1,
             villages_one_based=[],
-            removed_edges_one_based=COMMON_REMOVED_EDGES_ONE_BASED,
-            weather_mode="train_medium",
+            removed_edges_one_based=STAGE2_REMOVED_EDGES_ONE_BASED,
+            weather_mode="balanced",
             warmup_episodes=260,
+            warmup_oracle_interval=5,
             max_rl_episodes=900,
             min_rl_episodes=150,
             eval_interval=20,
@@ -131,10 +171,11 @@ def build_stage_specs(cfg: PipelineConfig) -> List[StageSpec]:
             init_money=10000,
             num_days=30,
             start_node_one_based=1,
-            villages_one_based=[7],
+            villages_one_based=[14],
             removed_edges_one_based=[],
-            weather_mode="eval",
+            weather_mode="balanced",
             warmup_episodes=60,
+            warmup_oracle_interval=3,
             max_rl_episodes=1200,
             min_rl_episodes=200,
             eval_interval=25,
@@ -168,22 +209,22 @@ def _build_edges(removed_edges_one_based: Sequence[Tuple[int, int]]) -> List[Tup
 def _stage_override(stage: StageSpec) -> Dict[str, Any]:
     return {
         "CONFIG_NAME": f"Level4PipelineStage{stage.stage_id}",
-        "NUM_NODES": Level35Config.NUM_NODES,
+        "NUM_NODES": Level4Config.NUM_NODES,
         "NUM_DAYS": stage.num_days,
         "INIT_MONEY": stage.init_money,
-        "WEIGHT_LIMIT": Level35Config.WEIGHT_LIMIT,
-        "MINE_INCOME": Level35Config.MINE_INCOME,
-        "WATER_WEIGHT": Level35Config.WATER_WEIGHT,
-        "WATER_PRICE_BASE": Level35Config.WATER_PRICE_BASE,
-        "FOOD_WEIGHT": Level35Config.FOOD_WEIGHT,
-        "FOOD_PRICE_BASE": Level35Config.FOOD_PRICE_BASE,
+        "WEIGHT_LIMIT": Level4Config.WEIGHT_LIMIT,
+        "MINE_INCOME": Level4Config.MINE_INCOME,
+        "WATER_WEIGHT": Level4Config.WATER_WEIGHT,
+        "WATER_PRICE_BASE": Level4Config.WATER_PRICE_BASE,
+        "FOOD_WEIGHT": Level4Config.FOOD_WEIGHT,
+        "FOOD_PRICE_BASE": Level4Config.FOOD_PRICE_BASE,
         "START": _to_zero_based(stage.start_node_one_based),
-        "END": Level35Config.END,
-        "MINES": [_to_zero_based(11)],
+        "END": Level4Config.END,
+        "MINES": list(Level4Config.MINES),
         "VILLAGES": [_to_zero_based(v) for v in stage.villages_one_based],
         "EDGES": _build_edges(stage.removed_edges_one_based),
-        "WEATHER_MODES": dict(Level35Config.WEATHER_MODES),
-        "WEATHER_TRANSITION": Level35Config.WEATHER_TRANSITION,
+        "WEATHER_MODES": dict(Level4Config.WEATHER_MODES),
+        "WEATHER_TRANSITION": Level4Config.WEATHER_TRANSITION,
     }
 
 
@@ -208,10 +249,10 @@ def _stage_episode_epsilon(
 
 def _node3_to_mine_choice(path_history: Sequence[int]) -> Optional[float]:
     node3 = _to_zero_based(3)
-    node6 = _to_zero_based(6)
+    mine_branch = _to_zero_based(8)
     for idx in range(len(path_history) - 1):
         if path_history[idx] == node3:
-            return 1.0 if path_history[idx + 1] == node6 else 0.0
+            return 1.0 if path_history[idx + 1] == mine_branch else 0.0
     return None
 
 
@@ -276,7 +317,7 @@ def _warn_level35_trap(records: Sequence[Dict[str, float]], shortest_len: int) -
 
 
 def _stage2_warmup_filter(payload: Dict[str, Any]) -> bool:
-    mine_node = _to_zero_based(11)
+    mine_node = int(Level4Config.MINES[0])
     path = payload.get("path_history", [])
     if not isinstance(path, list):
         return False
@@ -349,11 +390,12 @@ def _run_stage_warmup(
         env=env,
         level=cfg.level,
         episodes=stage.warmup_episodes,
-        time_limit=cfg.oracle_time_limit,
+        time_limit=cfg.oracle_warmup_time_limit,
         device=cfg.device or ("cuda" if torch.cuda.is_available() else "cpu"),
         log_interval=max(10, stage.eval_interval),
         trajectory_filter=filter_fn,
         oracle_config=env.config,
+        oracle_solve_interval=stage.warmup_oracle_interval,
     )
 
     if _should_relax_stage2_warmup(stage, summary, cfg.stage2_min_warmup_accepted):
@@ -371,11 +413,12 @@ def _run_stage_warmup(
             env=env,
             level=cfg.level,
             episodes=relaxed_extra,
-            time_limit=cfg.oracle_time_limit,
+            time_limit=cfg.oracle_warmup_time_limit,
             device=cfg.device or ("cuda" if torch.cuda.is_available() else "cpu"),
             log_interval=max(10, stage.eval_interval),
             trajectory_filter=None,
             oracle_config=env.config,
+            oracle_solve_interval=max(1, stage.warmup_oracle_interval),
         )
         summary = _merge_warmup_summaries(summary, relaxed)
 
@@ -462,7 +505,7 @@ def run_level4_pipeline(cfg: PipelineConfig) -> None:
                     trainer.update(rollout, last_value)
 
                 path_history = list(env.state.path_history) if env.state is not None else []
-                mine_node = _to_zero_based(11)
+                mine_node = int(Level4Config.MINES[0])
                 reached_mine = 1.0 if mine_node in path_history else 0.0
                 node3_choice = _node3_to_mine_choice(path_history)
 
@@ -567,8 +610,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--stage1-start-node",
         type=int,
-        default=11,
-        choices=[10, 11],
+        default=18,
+        choices=[17, 18],
         help="Stage1 起点（节点编号，1-based）",
     )
     parser.add_argument(
