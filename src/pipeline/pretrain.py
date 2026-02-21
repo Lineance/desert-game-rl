@@ -1,5 +1,6 @@
 import argparse
 import csv
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, TextIO
@@ -16,7 +17,7 @@ from src.env.config import (
     RLConfig,
 )
 from src.env.environment import make_env
-from src.models.agent import create_agent
+from src.models.agent import HybridRNNAgent, create_agent
 from src.models.ppo import PPOTrainer
 from src.pipeline.warmup import warmup_with_oracle
 
@@ -70,6 +71,11 @@ def _init_pretrain_loggers(
             "buy_food",
             "success",
             "match_rate",
+            "student_steps",
+            "student_mine_days",
+            "student_buy_water",
+            "student_buy_food",
+            "student_success",
         ],
     )
     csv_writer.writeheader()
@@ -86,6 +92,74 @@ def _init_pretrain_loggers(
         print(f"TensorBoard不可用，已跳过TB日志：{tensorboard_error}")
 
     return csv_file, csv_writer, tb_writer, csv_path, tb_dir
+
+
+def _resolve_resume_path(resume: Optional[str], level: int) -> Optional[Path]:
+    if resume is None:
+        return None
+    resume = resume.strip()
+    if not resume:
+        return None
+    if resume.lower() == "latest":
+        return CHECKPOINTS_DIR / f"level{level}_pretrain_latest.pt"
+    return Path(resume)
+
+
+def _load_pretrain_agent_from_checkpoint(path: Path, device: str) -> HybridRNNAgent:
+    try:
+        checkpoint = torch.load(path, map_location=device, weights_only=False)
+    except TypeError:
+        checkpoint = torch.load(path, map_location=device)
+
+    if not isinstance(checkpoint, dict):
+        raise ValueError("Invalid checkpoint format")
+
+    if all(k in checkpoint for k in ("state_dict", "obs_dim", "num_locations", "config")):
+        agent = HybridRNNAgent(
+            obs_dim=int(checkpoint["obs_dim"]),
+            num_locations=int(checkpoint["num_locations"]),
+            config=checkpoint["config"],
+        )
+        agent.load_state_dict(checkpoint["state_dict"])
+        agent.to(device)
+        return agent
+
+    if all(k in checkpoint for k in ("agent_state_dict", "obs_dim", "num_locations", "config")):
+        agent = HybridRNNAgent(
+            obs_dim=int(checkpoint["obs_dim"]),
+            num_locations=int(checkpoint["num_locations"]),
+            config=checkpoint["config"],
+        )
+        agent.load_state_dict(checkpoint["agent_state_dict"])
+        agent.to(device)
+        return agent
+
+    raise ValueError("Unsupported checkpoint format for pretrain resume")
+
+
+def _infer_resume_episode(path: Path, checkpoint: Optional[Dict[str, Any]] = None) -> int:
+    if isinstance(checkpoint, dict):
+        episode = checkpoint.get("episode")
+        if isinstance(episode, int) and episode >= 0:
+            return episode + 1
+
+    match = re.search(r"_episode(\d+)\.pt$", path.name)
+    if match:
+        return int(match.group(1))
+    return 0
+
+
+def _save_pretrain_latest_checkpoint(path: Path, agent: HybridRNNAgent, episode: int) -> None:
+    torch.save(
+        {
+            "state_dict": agent.state_dict(),
+            "config": agent.config,
+            "obs_dim": agent.obs_dim,
+            "num_locations": agent.num_locations,
+            "episode": int(episode),
+        },
+        path,
+    )
 
 
 def _write_pretrain_metrics(
@@ -108,6 +182,11 @@ def _write_pretrain_metrics(
             "buy_food": float(item.get("buy_food", 0.0)),
             "success": float(item.get("success", 0.0)),
             "match_rate": float(item.get("match_rate", 0.0)),
+            "student_steps": float(item.get("student_steps", 0.0)),
+            "student_mine_days": float(item.get("student_mine_days", 0.0)),
+            "student_buy_water": float(item.get("student_buy_water", 0.0)),
+            "student_buy_food": float(item.get("student_buy_food", 0.0)),
+            "student_success": float(item.get("student_success", 0.0)),
         }
         csv_writer.writerow(row)
 
@@ -122,6 +201,11 @@ def _write_pretrain_metrics(
             tb_writer.add_scalar("pretrain/buy_food", row["buy_food"], episode)
             tb_writer.add_scalar("pretrain/success", row["success"], episode)
             tb_writer.add_scalar("pretrain/match_rate", row["match_rate"], episode)
+            tb_writer.add_scalar("pretrain/student_steps", row["student_steps"], episode)
+            tb_writer.add_scalar("pretrain/student_mine_days", row["student_mine_days"], episode)
+            tb_writer.add_scalar("pretrain/student_buy_water", row["student_buy_water"], episode)
+            tb_writer.add_scalar("pretrain/student_buy_food", row["student_buy_food"], episode)
+            tb_writer.add_scalar("pretrain/student_success", row["student_success"], episode)
 
     if tb_writer is not None:
         tb_writer.add_scalar("pretrain_summary/success_rate", float(summary["success_rate"]), 0)
@@ -140,6 +224,31 @@ def _write_pretrain_metrics(
             0,
         )
         tb_writer.add_scalar("pretrain_summary/match_rate", float(summary["match_rate"]), 0)
+        tb_writer.add_scalar(
+            "pretrain_summary/student_success_rate",
+            float(summary.get("student_success_rate", 0.0)),
+            0,
+        )
+        tb_writer.add_scalar(
+            "pretrain_summary/student_avg_steps",
+            float(summary.get("student_avg_steps", 0.0)),
+            0,
+        )
+        tb_writer.add_scalar(
+            "pretrain_summary/student_avg_mine_per_episode",
+            float(summary.get("student_avg_mine_per_episode", 0.0)),
+            0,
+        )
+        tb_writer.add_scalar(
+            "pretrain_summary/student_avg_buy_water",
+            float(summary.get("student_avg_buy_water", 0.0)),
+            0,
+        )
+        tb_writer.add_scalar(
+            "pretrain_summary/student_avg_buy_food",
+            float(summary.get("student_avg_buy_food", 0.0)),
+            0,
+        )
 
 
 def evaluate_pretrain_metrics(summary: Dict[str, float]) -> Dict[str, object]:
@@ -229,6 +338,7 @@ def pretrain_only(
     oracle_time_limit: int = 20,
     output_path: Optional[str] = None,
     save_interval: int = 0,
+    resume: Optional[str] = None,
 ) -> None:
     """仅执行Oracle蒸馏预热并保存模型。"""
     if device is None:
@@ -241,7 +351,29 @@ def pretrain_only(
 
     selected_mode = _resolve_weather_mode(level, weather_mode)
     env = make_env(level=level, seed=42, weather_mode=selected_mode)
-    agent = create_agent(env, RLConfig(), device=device)
+    resume_path = _resolve_resume_path(resume, level)
+    resume_start_episode = 0
+
+    if resume_path is not None:
+        if not resume_path.exists():
+            raise FileNotFoundError(f"未找到断点文件: {resume_path}")
+        try:
+            resume_agent = _load_pretrain_agent_from_checkpoint(resume_path, device)
+        except Exception:
+            resume_agent = HybridRNNAgent.load(str(resume_path), device=device)
+        agent = resume_agent
+
+        try:
+            try:
+                resume_checkpoint = torch.load(resume_path, map_location=device, weights_only=False)
+            except TypeError:
+                resume_checkpoint = torch.load(resume_path, map_location=device)
+        except Exception:
+            resume_checkpoint = None
+        resume_start_episode = _infer_resume_episode(resume_path, resume_checkpoint)
+    else:
+        agent = create_agent(env, RLConfig(), device=device)
+
     trainer = PPOTrainer(agent, agent.config, device=device)
     CHECKPOINTS_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -251,6 +383,8 @@ def pretrain_only(
         f"level={level}, weather_mode={selected_mode}, "
         f"warmup_episodes={warmup_episodes}, device={device}"
     )
+    if resume_path is not None:
+        print(f"resume_from={resume_path}, start_episode={resume_start_episode}")
     print("=" * 60)
 
     csv_file, csv_writer, tb_writer, csv_path, tb_dir = _init_pretrain_loggers(level)
@@ -266,6 +400,13 @@ def pretrain_only(
         interval_path = CHECKPOINTS_DIR / f"level{level}_pretrain_episode{episode_number}.pt"
         try:
             agent.save(str(interval_path))
+            latest_path = CHECKPOINTS_DIR / f"level{level}_pretrain_latest.pt"
+            try:
+                _save_pretrain_latest_checkpoint(latest_path, agent, episode_number - 1)
+            except Exception as latest_save_error:
+                print(
+                    f"预训练latest断点更新失败: episode={episode_number}, error={latest_save_error}"
+                )
             print(f"预训练阶段模型已保存: episode={episode_number}, path={interval_path}")
         except Exception as save_error:
             print(f"预训练阶段模型保存失败: episode={episode_number}, error={save_error}")
@@ -279,6 +420,7 @@ def pretrain_only(
             warmup_episodes,
             oracle_time_limit,
             device,
+            start_episode=resume_start_episode,
             metrics=warmup_metrics,
             on_episode_end=_save_interval_checkpoint,
         )
@@ -316,6 +458,14 @@ def pretrain_only(
     agent.save(str(save_path))
     print(f"预训练模型已保存: {save_path}")
 
+    latest_path = CHECKPOINTS_DIR / f"level{level}_pretrain_latest.pt"
+    final_episode = resume_start_episode + warmup_episodes - 1
+    try:
+        _save_pretrain_latest_checkpoint(latest_path, agent, final_episode)
+        print(f"预训练latest断点已更新: {latest_path}")
+    except Exception as latest_save_error:
+        print(f"预训练latest断点更新失败: {latest_save_error}")
+
 
 def pretrain_main() -> None:
     parser = argparse.ArgumentParser()
@@ -346,6 +496,12 @@ def pretrain_main() -> None:
         default=0,
         help="按episode间隔保存预训练阶段模型（0表示关闭）",
     )
+    parser.add_argument(
+        "--resume",
+        type=str,
+        default=None,
+        help="从已有模型断点继续预训练（可传文件路径或latest）",
+    )
     args = parser.parse_args()
 
     pretrain_only(
@@ -356,4 +512,5 @@ def pretrain_main() -> None:
         oracle_time_limit=args.oracle_time_limit,
         output_path=args.output,
         save_interval=args.save_interval,
+        resume=args.resume,
     )

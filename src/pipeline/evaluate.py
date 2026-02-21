@@ -366,7 +366,7 @@ def generate_result_excel(
 def main():
     parser = argparse.ArgumentParser(description="评估沙漠穿越智能体")
     parser.add_argument("agent_path", type=str, help="智能体模型路径")
-    parser.add_argument("--level", type=int, default=3, choices=[3, 4], help="关卡（3或4）")
+    parser.add_argument("--level", type=int, default=3, choices=[3, 4, 35], help="关卡")
     parser.add_argument(
         "--runs", type=int, default=1, help="运行次数（1表示单轮详细输出，>1表示统计）"
     )

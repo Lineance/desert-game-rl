@@ -21,7 +21,7 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 import torch
 
-from src.env.config import Level3Config, Level4Config
+from src.env.config import Level3Config, Level4Config, Level35Config
 from src.env.environment import make_env
 from src.models.agent import HybridRNNAgent
 from src.pipeline.evaluate import run_episode
@@ -30,7 +30,12 @@ from src.pipeline.oracle import solve_theoretical_optimal
 
 def _get_weather_modes(level: int) -> List[str]:
 
-    cfg = Level3Config if level == 3 else Level4Config
+    if level == 3:
+        cfg = Level3Config
+    elif level == 4:
+        cfg = Level4Config
+    else:
+        cfg = Level35Config
 
     return list(cfg.WEATHER_MODES.keys())
 
@@ -457,7 +462,7 @@ def main() -> None:
         "agent_path", type=str, help="模型路径，如 artifacts/checkpoints/level3_best.pt"
     )
 
-    parser.add_argument("--level", type=int, choices=[3, 4], default=3)
+    parser.add_argument("--level", type=int, choices=[3, 4, 35], default=3)
 
     parser.add_argument("--runs", type=int, default=100, help="每个天气模式的评测轮数")
 

@@ -38,7 +38,7 @@ eval model level="3":
 
 # 基准测试
 bench model level="3":
-    uv run python scripts/benchmark.py {{model}} --level {{level}} --runs 30 --with-oracle --output-json artifacts/benchmark/{{model}}.json
+    uv run python scripts/benchmark.py {{model}} --level {{level}} --runs 100
 
 # 验证结果文件
 validate file level="3":
