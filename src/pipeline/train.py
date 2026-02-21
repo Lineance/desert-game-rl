@@ -21,6 +21,15 @@ from src.env.config import (
 from src.env.environment import make_env
 from src.models.agent import HybridRNNAgent, create_agent
 from src.models.ppo import PPOTrainer
+from src.pipeline.curriculum import (
+    CurriculumState,
+    build_curriculum_state,
+    build_episode_stages,
+    next_stage_start_episode,
+    resolve_curriculum_modes,
+    stage_for_episode,
+    stage_progress,
+)
 from src.pipeline.warmup import warmup_with_oracle
 
 
@@ -94,6 +103,7 @@ def _save_training_state(
     best_net_profit: float,
     stats: Optional[Dict[str, float]],
     epsilon: float,
+    curriculum_state: Optional[Dict[str, Any]] = None,
 ) -> None:
     scheduler = getattr(trainer, "scheduler", None) or getattr(trainer, "lr_scheduler", None)
     scheduler_state = scheduler.state_dict() if scheduler is not None else None
@@ -118,6 +128,7 @@ def _save_training_state(
             "best_net_profit": float(best_net_profit),
             "epsilon": float(epsilon),
             "stats": stats,
+            "curriculum_state": curriculum_state,
             "config": agent.config,
             "obs_dim": agent.obs_dim,
             "num_locations": agent.num_locations,
@@ -156,6 +167,28 @@ def _compute_epsilon(
     return eps_start + (eps_end - eps_start) * progress
 
 
+def _compute_resume_epsilon(
+    episode: int,
+    start_episode: int,
+    resume_epsilon: Optional[float],
+    eps_start: float,
+    eps_end: float,
+    eps_decay_episodes: int,
+) -> float:
+    if resume_epsilon is None or episode < start_episode:
+        return _compute_epsilon(episode, eps_start, eps_end, eps_decay_episodes)
+
+    if start_episode >= eps_decay_episodes:
+        return float(eps_end)
+
+    lower = min(eps_start, eps_end)
+    upper = max(eps_start, eps_end)
+    anchor_epsilon = min(max(float(resume_epsilon), lower), upper)
+    remaining_decay = max(1, eps_decay_episodes - start_episode)
+    progress = min(1.0, (episode - start_episode) / remaining_decay)
+    return anchor_epsilon + (eps_end - anchor_epsilon) * progress
+
+
 def _safe_save_latest(
     save_dir: Path,
     level: int,
@@ -167,6 +200,7 @@ def _safe_save_latest(
     stats: Optional[Dict[str, float]],
     epsilon: float,
     reason: str,
+    curriculum_state: Optional[Dict[str, Any]] = None,
 ) -> None:
     try:
         _save_training_state(
@@ -178,6 +212,7 @@ def _safe_save_latest(
             best_net_profit,
             stats,
             epsilon,
+            curriculum_state,
         )
         print(f"已自动保存latest断点({reason}): episode={episode}, epsilon={epsilon:.3f}")
     except Exception as save_error:
@@ -202,6 +237,9 @@ def _init_structured_loggers(
             "final_money",
             "net_profit",
             "epsilon",
+            "curriculum_stage",
+            "curriculum_weather_mode",
+            "curriculum_stage_progress",
             "rolling_return",
             "rolling_net_profit",
             "rolling_success_rate",
@@ -234,6 +272,9 @@ def _log_structured_metrics(
     episode: int,
     episode_info: Dict[str, Any],
     epsilon: float,
+    curriculum_stage: int,
+    curriculum_weather_mode: str,
+    curriculum_stage_progress: float,
     rolling_return: float,
     rolling_net_profit: float,
     rolling_success_rate: float,
@@ -248,6 +289,9 @@ def _log_structured_metrics(
         "final_money": float(episode_info.get("final_money", 0.0)),
         "net_profit": net_profit,
         "epsilon": float(epsilon),
+        "curriculum_stage": int(curriculum_stage),
+        "curriculum_weather_mode": str(curriculum_weather_mode),
+        "curriculum_stage_progress": float(curriculum_stage_progress),
         "rolling_return": float(rolling_return),
         "rolling_net_profit": float(rolling_net_profit),
         "rolling_success_rate": float(rolling_success_rate),
@@ -264,7 +308,12 @@ def _log_structured_metrics(
         tb_writer.add_scalar("train/net_profit", row["net_profit"], episode)
         tb_writer.add_scalar("train/success_rate", row["rolling_success_rate"], episode)
         tb_writer.add_scalar("train/epsilon", row["epsilon"], episode)
+        tb_writer.add_scalar("train/curriculum_stage", row["curriculum_stage"], episode)
+        tb_writer.add_scalar(
+            "train/curriculum_stage_progress", row["curriculum_stage_progress"], episode
+        )
         tb_writer.add_scalar("train/rolling_net_profit", row["rolling_net_profit"], episode)
+        tb_writer.add_text("train/curriculum_weather_mode", row["curriculum_weather_mode"], episode)
         if stats is not None:
             tb_writer.add_scalar("train/policy_loss", row["policy_loss"], episode)
             tb_writer.add_scalar("train/value_loss", row["value_loss"], episode)
@@ -283,6 +332,8 @@ def train(
     weather_mode: Optional[str] = None,
     oracle_warmup_episodes: int = 0,
     oracle_time_limit: int = 20,
+    curriculum: bool = False,
+    curriculum_modes: Optional[str] = None,
 ) -> None:
     """训练入口。"""
     if device is None:
@@ -293,7 +344,12 @@ def train(
 
     config = RLConfig()
     selected_mode = _resolve_weather_mode(level, weather_mode)
-    env = make_env(level=level, seed=42, weather_mode=selected_mode)
+
+    curriculum_enabled = bool(curriculum)
+    curriculum_stage_modes = (
+        resolve_curriculum_modes(level, curriculum_modes) if curriculum_enabled else []
+    )
+    current_curriculum_stage_id = 0
 
     resume_path = _resolve_resume_path(resume, level)
     checkpoint = None
@@ -304,6 +360,33 @@ def train(
         print(f"加载断点: {resume_path}")
     elif resume_path is not None:
         print(f"未找到断点文件: {resume_path}，将从头训练。")
+
+    restored_curriculum = (
+        CurriculumState.from_dict(checkpoint.get("curriculum_state"))
+        if checkpoint is not None
+        else None
+    )
+    if restored_curriculum is not None:
+        curriculum_enabled = restored_curriculum.enabled
+        if restored_curriculum.stage_modes:
+            curriculum_stage_modes = restored_curriculum.stage_modes
+        current_curriculum_stage_id = restored_curriculum.current_stage_id
+        print(
+            "恢复课程学习状态: "
+            f"enabled={curriculum_enabled}, stage={current_curriculum_stage_id}, "
+            f"modes={curriculum_stage_modes}"
+        )
+
+    if curriculum_enabled and not curriculum_stage_modes:
+        curriculum_stage_modes = resolve_curriculum_modes(level, None)
+
+    initial_weather_mode = selected_mode
+    if curriculum_enabled and curriculum_stage_modes:
+        safe_stage_id = max(0, min(current_curriculum_stage_id, len(curriculum_stage_modes) - 1))
+        current_curriculum_stage_id = safe_stage_id
+        initial_weather_mode = curriculum_stage_modes[safe_stage_id]
+
+    env = make_env(level=level, seed=42, weather_mode=initial_weather_mode)
 
     if checkpoint is not None and "state_dict" in checkpoint:
         agent, config = _build_agent_from_checkpoint(checkpoint, config, device)
@@ -331,9 +414,8 @@ def train(
         best_net_profit = float(
             checkpoint.get("best_net_profit", checkpoint.get("best_final_money", best_net_profit))
         )
-        resume_epsilon = (
-            float(checkpoint.get("epsilon")) if checkpoint.get("epsilon") is not None else None
-        )
+        checkpoint_epsilon = checkpoint.get("epsilon")
+        resume_epsilon = float(checkpoint_epsilon) if checkpoint_epsilon is not None else None
         stats = checkpoint.get("stats")
 
     if checkpoint is not None and "state_dict" in checkpoint and start_episode == 0:
@@ -372,7 +454,11 @@ def train(
     print("=" * 60)
     print("训练开始")
     available_modes = ", ".join(sorted(env.config.WEATHER_MODES.keys()))
-    print(f"天气模式: {selected_mode} (可选: {available_modes})")
+    if curriculum_enabled:
+        print(f"课程学习: 开启, 阶段模式={curriculum_stage_modes}")
+        print(f"初始阶段: {current_curriculum_stage_id}, 天气模式: {initial_weather_mode}")
+    else:
+        print(f"天气模式: {selected_mode} (可选: {available_modes})")
     print("=" * 60)
 
     csv_file, csv_writer, tb_writer, csv_path, tb_dir = _init_structured_loggers(level)
@@ -384,9 +470,20 @@ def train(
     eps_start = 0.30
     eps_end = 0.05
     eps_decay_episodes = max(1, int(num_episodes * 0.7))
+    curriculum_stages = (
+        build_episode_stages(curriculum_stage_modes, num_episodes) if curriculum_enabled else []
+    )
+    current_weather_mode = initial_weather_mode
 
     if start_episode > 0:
-        derived_epsilon = _compute_epsilon(start_episode, eps_start, eps_end, eps_decay_episodes)
+        derived_epsilon = _compute_resume_epsilon(
+            start_episode,
+            start_episode,
+            resume_epsilon,
+            eps_start,
+            eps_end,
+            eps_decay_episodes,
+        )
         if resume_epsilon is not None:
             print(
                 f"恢复断点进度: start_episode={start_episode}, "
@@ -401,12 +498,54 @@ def train(
         print(f"断点续训起始回合 {start_episode} >= 总回合 {num_episodes}，无需继续训练。")
         return
 
+    if curriculum_enabled and curriculum_stages:
+        if checkpoint is None or restored_curriculum is None:
+            start_stage = stage_for_episode(curriculum_stages, start_episode)
+            current_curriculum_stage_id = start_stage.stage_id
+            current_weather_mode = start_stage.weather_mode
+            env = make_env(level=level, seed=42, weather_mode=current_weather_mode)
+        elif 0 <= current_curriculum_stage_id < len(curriculum_stages):
+            current_weather_mode = curriculum_stages[current_curriculum_stage_id].weather_mode
+            env = make_env(level=level, seed=42, weather_mode=current_weather_mode)
+        print(
+            "课程学习起点: "
+            f"episode={start_episode}, stage={current_curriculum_stage_id}, mode={current_weather_mode}"
+        )
+
     last_completed_episode = start_episode - 1
-    last_epsilon = _compute_epsilon(last_completed_episode, eps_start, eps_end, eps_decay_episodes)
+    if resume_epsilon is not None and start_episode > 0:
+        last_epsilon = resume_epsilon
+    else:
+        last_epsilon = _compute_epsilon(
+            last_completed_episode, eps_start, eps_end, eps_decay_episodes
+        )
 
     try:
         for episode in range(start_episode, num_episodes):
-            epsilon = _compute_epsilon(episode, eps_start, eps_end, eps_decay_episodes)
+            epsilon = _compute_resume_epsilon(
+                episode,
+                start_episode,
+                resume_epsilon,
+                eps_start,
+                eps_end,
+                eps_decay_episodes,
+            )
+
+            curriculum_stage_progress = 1.0
+            next_stage_episode = None
+            if curriculum_enabled and curriculum_stages:
+                stage = stage_for_episode(curriculum_stages, episode)
+                next_stage_episode = next_stage_start_episode(curriculum_stages, stage.stage_id)
+                if stage.stage_id != current_curriculum_stage_id:
+                    current_curriculum_stage_id = stage.stage_id
+                    current_weather_mode = stage.weather_mode
+                    env = make_env(level=level, seed=42, weather_mode=current_weather_mode)
+                    max_steps = env.config.NUM_DAYS + 2
+                    print(
+                        "课程阶段切换: "
+                        f"episode={episode}, stage={current_curriculum_stage_id}, mode={current_weather_mode}"
+                    )
+                curriculum_stage_progress = stage_progress(stage, episode)
 
             rollout_buffer, last_value, episode_info = trainer.collect_rollout(
                 env,
@@ -469,6 +608,9 @@ def train(
                 episode,
                 episode_info,
                 epsilon,
+                current_curriculum_stage_id,
+                current_weather_mode,
+                curriculum_stage_progress,
                 rolling_return,
                 rolling_net_profit,
                 rolling_success_rate,
@@ -528,6 +670,19 @@ def train(
                         f"ratio=[{stats['min_ratio']:.3f}, {stats['max_ratio']:.3f}], "
                         f"epsilon={epsilon:.3f}"
                     )
+                if curriculum_enabled:
+                    if next_stage_episode is None:
+                        print(
+                            "  课程阶段: "
+                            f"stage={current_curriculum_stage_id}, mode={current_weather_mode}, "
+                            f"progress={curriculum_stage_progress * 100:.1f}%, next=final"
+                        )
+                    else:
+                        print(
+                            "  课程阶段: "
+                            f"stage={current_curriculum_stage_id}, mode={current_weather_mode}, "
+                            f"progress={curriculum_stage_progress * 100:.1f}%, next_episode={next_stage_episode}"
+                        )
 
             if checkpoint_interval > 0 and episode % checkpoint_interval == 0:
                 _save_training_state(
@@ -539,6 +694,9 @@ def train(
                     best_net_profit,
                     stats,
                     epsilon,
+                    build_curriculum_state(
+                        curriculum_enabled, curriculum_stage_modes, current_curriculum_stage_id
+                    ).to_dict(),
                 )
 
             if episode % 500 == 0 and episode > 0:
@@ -560,6 +718,9 @@ def train(
             stats,
             last_epsilon,
             reason="keyboard_interrupt",
+            curriculum_state=build_curriculum_state(
+                curriculum_enabled, curriculum_stage_modes, current_curriculum_stage_id
+            ).to_dict(),
         )
         if tb_writer is not None:
             tb_writer.close()
@@ -578,6 +739,9 @@ def train(
             stats,
             last_epsilon,
             reason="exception",
+            curriculum_state=build_curriculum_state(
+                curriculum_enabled, curriculum_stage_modes, current_curriculum_stage_id
+            ).to_dict(),
         )
         if tb_writer is not None:
             tb_writer.close()
@@ -593,7 +757,10 @@ def train(
         best_return,
         best_net_profit,
         stats,
-        _compute_epsilon(num_episodes - 1, eps_start, eps_end, eps_decay_episodes),
+        last_epsilon,
+        build_curriculum_state(
+            curriculum_enabled, curriculum_stage_modes, current_curriculum_stage_id
+        ).to_dict(),
     )
     print(f"\n训练完成！最佳奖励: {best_return:.1f}")
     if tb_writer is not None:
@@ -632,6 +799,17 @@ def main() -> None:
         default=20,
         help="Oracle求解时间上限（秒）",
     )
+    parser.add_argument(
+        "--curriculum",
+        action="store_true",
+        help="启用课程学习（按episode分阶段切换天气模式）",
+    )
+    parser.add_argument(
+        "--curriculum-modes",
+        type=str,
+        default=None,
+        help="课程阶段天气模式列表，逗号分隔（如 train_easy,train_medium,eval）",
+    )
     args = parser.parse_args()
 
     train(
@@ -644,4 +822,6 @@ def main() -> None:
         weather_mode=args.weather_mode,
         oracle_warmup_episodes=args.oracle_warmup_episodes,
         oracle_time_limit=args.oracle_time_limit,
+        curriculum=args.curriculum,
+        curriculum_modes=args.curriculum_modes,
     )

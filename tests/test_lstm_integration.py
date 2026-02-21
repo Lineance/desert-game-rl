@@ -4,7 +4,7 @@ import torch.nn.functional as F
 
 from src.env.environment import make_env
 from src.models.agent import create_agent
-from src.models.ppo import PPOTrainer
+from src.models.ppo import PPOTrainer, RolloutBuffer
 
 
 def _clone_obs_with_weather(obs: np.ndarray, weather_idx: int) -> np.ndarray:
@@ -242,3 +242,68 @@ def test_rollout_buffer_with_lstm_hidden_states():
     assert "value_loss" in stats
     assert np.isfinite(stats["policy_loss"])
     assert np.isfinite(stats["value_loss"])
+
+
+def test_valid_actions_does_not_mutate_neighbors():
+    env = make_env(level=3, seed=13)
+    env.reset(seed=13)
+
+    pos = env.state.position
+    neighbors_before = list(env.neighbors[pos])
+
+    for _ in range(5):
+        va = env.get_valid_actions()
+        assert env.state.position in va["valid_moves"]
+
+    neighbors_after = list(env.neighbors[pos])
+    assert neighbors_before == neighbors_after
+
+
+def test_build_episode_segments_splits_on_hidden_reset_boundary():
+    """即使done标记异常，零hidden边界也应触发新segment。"""
+    buffer = RolloutBuffer()
+
+    zero_h = np.zeros((2, 1, 8), dtype=np.float32)
+    zero_c = np.zeros((2, 1, 8), dtype=np.float32)
+    nonzero_h = np.ones((2, 1, 8), dtype=np.float32)
+    nonzero_c = np.ones((2, 1, 8), dtype=np.float32)
+
+    # 第1个episode（done故意全False）
+    for _ in range(3):
+        buffer.add(
+            obs=np.zeros(19, dtype=np.float32),
+            action={"move": 0, "mine": False, "buy_water": 0, "buy_food": 0},
+            reward=0.0,
+            value=0.0,
+            log_prob=0.0,
+            done=False,
+            hidden=(nonzero_h, nonzero_c),
+            valid_actions={"valid_moves": [0], "can_mine": False, "can_buy": False},
+        )
+
+    # 第2个episode起点：hidden重置为零（done仍故意不给True）
+    buffer.add(
+        obs=np.zeros(19, dtype=np.float32),
+        action={"move": 0, "mine": False, "buy_water": 0, "buy_food": 0},
+        reward=0.0,
+        value=0.0,
+        log_prob=0.0,
+        done=False,
+        hidden=(zero_h, zero_c),
+        valid_actions={"valid_moves": [0], "can_mine": False, "can_buy": False},
+    )
+    buffer.add(
+        obs=np.zeros(19, dtype=np.float32),
+        action={"move": 0, "mine": False, "buy_water": 0, "buy_food": 0},
+        reward=0.0,
+        value=0.0,
+        log_prob=0.0,
+        done=False,
+        hidden=(nonzero_h, nonzero_c),
+        valid_actions={"valid_moves": [0], "can_mine": False, "can_buy": False},
+    )
+
+    segments = buffer.build_episode_segments()
+    assert len(segments) == 2
+    assert (segments[0]["start"], segments[0]["end"]) == (0, 3)
+    assert (segments[1]["start"], segments[1]["end"]) == (3, 5)

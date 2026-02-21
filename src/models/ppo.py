@@ -3,6 +3,7 @@ PPO (Proximal Policy Optimization) 算法实现
 支持RNN序列训练和GAE优势估计
 """
 
+from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -57,14 +58,18 @@ class RolloutBuffer:
         valid_actions=None,
     ):
         """添加一个时间步的数据"""
-        self.observations.append(obs)
-        self.actions.append(action)
+        self.observations.append(np.array(obs, dtype=np.float32, copy=True))
+        self.actions.append(deepcopy(action))
         self.rewards.append(reward)
         self.values.append(value)
         self.log_probs.append(log_prob)
         self.dones.append(done)
-        self.hidden_states.append(hidden)
-        self.valid_actions_list.append(valid_actions)  # BUG修复1: 存储valid_actions
+        if hidden is None:
+            self.hidden_states.append(None)
+        else:
+            h, c = hidden
+            self.hidden_states.append((np.array(h, copy=True), np.array(c, copy=True)))
+        self.valid_actions_list.append(deepcopy(valid_actions))
 
     def clear(self):
         """清空缓冲区"""
@@ -130,27 +135,43 @@ class RolloutBuffer:
         }
 
     def build_episode_segments(self) -> List[Dict[str, Any]]:
-        """构建完整episode序列段（用于完整BPTT）"""
+        """构建完整episode序列段（用于完整BPTT）。
+
+        优先按done切段；若done缺失，则当检测到“零初始化hidden”时也视作新episode起点，
+        防止跨episode反传。
+        """
         segments: List[Dict[str, Any]] = []
         n = len(self.observations)
-        start = 0
 
-        while start < n:
-            end = start
-            while end < n and not self.dones[end]:
-                end += 1
-            if end < n and self.dones[end]:
-                end += 1
+        if n == 0:
+            return segments
 
-            if end > start:
-                segments.append(
-                    {
-                        "start": start,
-                        "end": end,
-                        "hidden_state": self.hidden_states[start],
-                    }
-                )
-            start = end
+        def is_zero_hidden(hidden: Optional[Tuple[np.ndarray, np.ndarray]]) -> bool:
+            if hidden is None:
+                return False
+            h, c = hidden
+            return bool(np.allclose(h, 0.0) and np.allclose(c, 0.0))
+
+        boundaries = [0]
+        for i in range(1, n):
+            prev_done = bool(self.dones[i - 1])
+            new_hidden_boundary = is_zero_hidden(self.hidden_states[i])
+            if prev_done or new_hidden_boundary:
+                boundaries.append(i)
+        boundaries.append(n)
+
+        for bi in range(len(boundaries) - 1):
+            start = boundaries[bi]
+            end = boundaries[bi + 1]
+            if end <= start:
+                continue
+            segments.append(
+                {
+                    "start": start,
+                    "end": end,
+                    "hidden_state": self.hidden_states[start],
+                }
+            )
 
         return segments
 
@@ -294,7 +315,13 @@ class PPOTrainer:
             old_values = values_tensor  # 用于价值裁剪
 
             # 策略损失（PPO裁剪）
-            ratio = torch.exp(new_log_probs - old_log_probs_tensor)
+            raw_log_ratio = new_log_probs - old_log_probs_tensor
+            if not torch.isfinite(raw_log_ratio).all():
+                raise ValueError("检测到非有限log_ratio，请检查hidden state与valid_actions一致性")
+            clipped_log_ratio = torch.clamp(raw_log_ratio, min=-20.0, max=20.0)
+            ratio = torch.exp(clipped_log_ratio)
+            if not torch.isfinite(ratio).all():
+                raise ValueError("检测到非有限ratio，请检查log_prob数值范围")
             max_ratio_seen = max(max_ratio_seen, float(ratio.max().item()))
             min_ratio_seen = min(min_ratio_seen, float(ratio.min().item()))
 
@@ -330,7 +357,7 @@ class PPOTrainer:
 
             # 统计
             with torch.no_grad():
-                approx_kl = ((ratio - 1) - ratio.log()).mean().item()
+                approx_kl = ((ratio - 1) - clipped_log_ratio).mean().item()
                 clip_fraction = ((ratio - 1).abs() > self.config.CLIP_EPS).float().mean().item()
 
             total_policy_loss += policy_loss.item()
@@ -454,6 +481,10 @@ class PPOTrainer:
                     hidden_state=hidden_tensor,
                 )
                 log_prob = new_log_probs.item()
+                if not np.isfinite(log_prob):
+                    raise ValueError(
+                        "collect_rollout得到非有限log_prob，请检查动作掩码与hidden state"
+                    )
 
             # 存储（使用索引版本，并传入valid_actions用于后续训练）
             buffer.add(

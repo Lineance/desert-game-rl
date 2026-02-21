@@ -450,7 +450,7 @@ class DesertCrossingEnv:
 
         valid_moves = []
         if s.weather_today != Weather.SANDSTORM:
-            valid_moves = self.neighbors[s.position]
+            valid_moves = list(self.neighbors[s.position])
         valid_moves.append(s.position)
 
         # 挖矿：必须在矿山且不是刚到达（上一天与当前在同一节点）
