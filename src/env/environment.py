@@ -4,7 +4,7 @@
 """
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 import numpy as np
 
@@ -19,6 +19,27 @@ from src.env.config import (
     get_neighbors,
 )
 from src.models.belief import WeatherBeliefModel, extract_belief_features
+
+
+def _build_runtime_config(base_config: Any, config_override: Optional[Mapping[str, Any]]) -> Any:
+    if not config_override:
+        return base_config
+
+    override_dict = dict(config_override)
+    safe_name = override_dict.pop("CONFIG_NAME", f"{base_config.__name__}Runtime")
+
+    attributes: Dict[str, Any] = {}
+    for key, value in base_config.__dict__.items():
+        if key.startswith("__"):
+            continue
+        attributes[key] = value
+
+    for key, value in override_dict.items():
+        if not isinstance(key, str) or not key.isupper():
+            continue
+        attributes[key] = value
+
+    return type(str(safe_name), (), attributes)
 
 
 @dataclass
@@ -520,15 +541,16 @@ class DesertCrossingEnv:
         }
 
 
-def make_env(level=3, **kwargs):
+def make_env(level=3, config_override: Optional[Mapping[str, Any]] = None, **kwargs):
     """创建环境"""
     if level == 3:
-        config = Level3Config
+        base_config = Level3Config
     elif level == 35:
-        config = Level35Config
+        base_config = Level35Config
     elif level == 4:
-        config = Level4Config
+        base_config = Level4Config
     else:
         raise ValueError(f"Unknown level: {level}")
 
+    config = _build_runtime_config(base_config, config_override)
     return DesertCrossingEnv(config=config, **kwargs)

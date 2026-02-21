@@ -7,6 +7,8 @@
 
 from __future__ import annotations
 
+import os
+from functools import lru_cache
 from typing import Any, Dict, List, Mapping, Sequence, Tuple
 
 import pulp
@@ -31,6 +33,68 @@ def _pick_config(level: int):
     raise ValueError(f"Unsupported level: {level}")
 
 
+@lru_cache(maxsize=32)
+def _get_adjacency_cached(
+    num_nodes: int,
+    edges_key: Tuple[Tuple[int, int], ...],
+):
+    return get_adjacency_matrix(
+        num_nodes,
+        [(int(edge[0]), int(edge[1])) for edge in edges_key],
+    )
+
+
+def _safe_worker_threads() -> int:
+    cpu = os.cpu_count() or 1
+    return max(1, min(int(cpu), 8))
+
+
+def _default_solver_options(*, fast: bool) -> List[str]:
+    threads = str(_safe_worker_threads())
+    if fast:
+        return [
+            "--mip_rel_gap",
+            "0.02",
+            "--mip_abs_gap",
+            "5.0",
+            "--threads",
+            threads,
+            "--presolve",
+            "on",
+        ]
+    return [
+        "--mip_rel_gap",
+        "0.0001",
+        "--mip_abs_gap",
+        "0.1",
+        "--threads",
+        threads,
+        "--presolve",
+        "on",
+    ]
+
+
+def _build_solver(
+    time_limit: int,
+    options: Sequence[str],
+):
+    try:
+        return pulp.HiGHS(
+            msg=False,
+            timeLimit=time_limit,
+            options=list(options),
+        )
+    except Exception:
+        try:
+            return pulp.PULP_CBC_CMD(
+                msg=False,
+                timeLimit=time_limit,
+                threads=_safe_worker_threads(),
+            )
+        except TypeError:
+            return pulp.PULP_CBC_CMD(msg=False, timeLimit=time_limit)
+
+
 def _build_model(
     config_cls,
     weather_seq: Sequence[int],
@@ -51,7 +115,8 @@ def _build_model(
     mines = list(config_cls.MINES)
     villages = list(config_cls.VILLAGES)
 
-    conn = get_adjacency_matrix(num_nodes, config_cls.EDGES)
+    edges_key = tuple(tuple(int(x) for x in edge) for edge in config_cls.EDGES)
+    conn = _get_adjacency_cached(num_nodes, edges_key)
 
     days = range(num_days + 1)
     act_days = range(1, num_days + 1)
@@ -221,28 +286,25 @@ def solve_theoretical_optimal(
     level: int,
     weather_seq: Sequence[int],
     time_limit: int = 60,
-) -> Dict[str, float]:
+) -> Dict[str, Any]:
     """求解已知天气下的理论最优。"""
     config_cls = _pick_config(level)
     prob, v = _build_model(config_cls, weather_seq)
 
-    try:
-        solver = pulp.HiGHS(
-            msg=False,
-            timeLimit=time_limit,
-            options=["--mip_rel_gap", "0.0001", "--mip_abs_gap", "0.1"],
-        )
-    except Exception:
-        solver = pulp.PULP_CBC_CMD(msg=False, timeLimit=time_limit)
+    solver = _build_solver(time_limit, _default_solver_options(fast=False))
 
     prob.solve(solver)
 
     status_name = pulp.LpStatus.get(prob.status, "Unknown")
-    objective = (
-        float(pulp.value(prob.objective))
-        if prob.status in [pulp.LpStatusOptimal, pulp.LpStatusNotSolved, pulp.LpStatusUndefined]
-        else float("nan")
-    )
+    raw_objective = pulp.value(prob.objective)
+    if prob.status in [
+        pulp.LpStatusOptimal,
+        pulp.LpStatusNotSolved,
+        pulp.LpStatusUndefined,
+    ] and isinstance(raw_objective, (int, float)):
+        objective = float(raw_objective)
+    else:
+        objective = float("nan")
 
     def _safe_value(var) -> float:
         value = pulp.value(var)
@@ -351,14 +413,44 @@ def solve_theoretical_plan(
     config_cls = _pick_config(level)
     prob, v = _build_model(config_cls, weather_seq)
 
-    try:
-        solver = pulp.HiGHS(
-            msg=False,
-            timeLimit=time_limit,
-            options=["--mip_rel_gap", "0.0001", "--mip_abs_gap", "0.1"],
-        )
-    except Exception:
-        solver = pulp.PULP_CBC_CMD(msg=False, timeLimit=time_limit)
+    solver = _build_solver(time_limit, _default_solver_options(fast=False))
+
+    prob.solve(solver)
+
+    status_name = pulp.LpStatus.get(prob.status, "Unknown")
+
+    plan: List[Dict[str, Any]] = []
+    reach_day = config_cls.NUM_DAYS
+    if prob.status in [pulp.LpStatusOptimal, pulp.LpStatusNotSolved, pulp.LpStatusUndefined]:
+        plan, reach_day = _extract_action_plan(v, config_cls)
+
+    reached = False
+    if "reached" in v:
+        r_last = pulp.value(v["reached"][config_cls.NUM_DAYS])
+        reached = bool(r_last is not None and r_last > 0.5)
+
+    return {
+        "status": status_name,
+        "reached": reached,
+        "reach_day": int(reach_day),
+        "plan": plan,
+    }
+
+
+def solve_theoretical_plan_with_config(
+    config_cls,
+    weather_seq: Sequence[int],
+    base_consumption: Mapping[int, Tuple[int, int]] | None = None,
+    time_limit: int = 60,
+    solver_options: Sequence[str] | None = None,
+) -> Dict[str, Any]:
+    """求解自定义配置的理论最优并返回动作方案。"""
+    prob, v = _build_model(config_cls, weather_seq, base_consumption=base_consumption)
+
+    if solver_options is None:
+        solver_options = _default_solver_options(fast=True)
+
+    solver = _build_solver(time_limit, solver_options)
 
     prob.solve(solver)
 
@@ -388,30 +480,27 @@ def solve_theoretical_optimal_with_config(
     base_consumption: Mapping[int, Tuple[int, int]] | None = None,
     time_limit: int = 60,
     solver_options: Sequence[str] | None = None,
-) -> Dict[str, float]:
+) -> Dict[str, Any]:
     """求解自定义配置的理论最优（用于扩展关卡测试）。"""
     prob, v = _build_model(config_cls, weather_seq, base_consumption=base_consumption)
 
     if solver_options is None:
-        solver_options = ["--mip_rel_gap", "0.0001", "--mip_abs_gap", "0.1"]
+        solver_options = _default_solver_options(fast=False)
 
-    try:
-        solver = pulp.HiGHS(
-            msg=False,
-            timeLimit=time_limit,
-            options=list(solver_options),
-        )
-    except Exception:
-        solver = pulp.PULP_CBC_CMD(msg=False, timeLimit=time_limit)
+    solver = _build_solver(time_limit, solver_options)
 
     prob.solve(solver)
 
     status_name = pulp.LpStatus.get(prob.status, "Unknown")
-    objective = (
-        float(pulp.value(prob.objective))
-        if prob.status in [pulp.LpStatusOptimal, pulp.LpStatusNotSolved, pulp.LpStatusUndefined]
-        else float("nan")
-    )
+    raw_objective = pulp.value(prob.objective)
+    if prob.status in [
+        pulp.LpStatusOptimal,
+        pulp.LpStatusNotSolved,
+        pulp.LpStatusUndefined,
+    ] and isinstance(raw_objective, (int, float)):
+        objective = float(raw_objective)
+    else:
+        objective = float("nan")
 
     def _safe_value(var) -> float:
         value = pulp.value(var)

@@ -10,7 +10,10 @@ import torch.nn.functional as F
 from src.env.environment import make_env
 from src.models.agent import HybridRNNAgent
 from src.models.ppo import PPOTrainer
-from src.pipeline.oracle import solve_theoretical_plan
+from src.pipeline.oracle import (
+    solve_theoretical_plan,
+    solve_theoretical_plan_with_config,
+)
 
 
 def _sanitize_oracle_action(action: Dict[str, Any], env, valid_actions: Dict[str, Any]) -> Dict:
@@ -90,6 +93,8 @@ def warmup_with_oracle(
     start_episode: int = 0,
     metrics: Optional[List[Dict[str, float]]] = None,
     on_episode_end: Optional[Callable[[int, Dict[str, float]], None]] = None,
+    trajectory_filter: Optional[Callable[[Dict[str, Any]], bool]] = None,
+    oracle_config: Optional[Any] = None,
 ) -> Dict[str, float]:
     if episodes <= 0:
         return {
@@ -104,6 +109,8 @@ def warmup_with_oracle(
             "final_value_loss": 0.0,
             "value_loss_trend": 0.0,
             "match_rate": 0.0,
+            "accepted_episodes": 0.0,
+            "filtered_episodes": 0.0,
         }
     if level not in (3, 35, 4):
         print("Oracle预热仅支持level 3/35/4，已跳过。")
@@ -119,6 +126,8 @@ def warmup_with_oracle(
             "final_value_loss": 0.0,
             "value_loss_trend": 0.0,
             "match_rate": 0.0,
+            "accepted_episodes": 0.0,
+            "filtered_episodes": 0.0,
         }
 
     agent.train()
@@ -138,6 +147,8 @@ def warmup_with_oracle(
     student_total_buy_food = 0
     student_success = 0
     student_eval_episodes = 0
+    accepted_episodes = 0
+    filtered_episodes = 0
 
     weather_mode = str(getattr(env, "weather_mode", "balanced"))
 
@@ -187,7 +198,14 @@ def warmup_with_oracle(
                 episode_record["student_success"] = float("nan")
 
         weather_seq = list(env.state.weather_future)
-        oracle = solve_theoretical_plan(level, weather_seq, time_limit=time_limit)
+        if oracle_config is None:
+            oracle = solve_theoretical_plan(level, weather_seq, time_limit=time_limit)
+        else:
+            oracle = solve_theoretical_plan_with_config(
+                oracle_config,
+                weather_seq,
+                time_limit=time_limit,
+            )
         plan = oracle.get("plan", [])
         if not plan:
             if ep % log_interval == 0:
@@ -277,6 +295,41 @@ def warmup_with_oracle(
                 on_episode_end(ep, dict(episode_record))
             continue
 
+        filter_payload = {
+            "episode": ep,
+            "plan": plan,
+            "weather_seq": weather_seq,
+            "steps": episode_steps,
+            "mine_days": episode_mine_days,
+            "buy_water": episode_buy_water,
+            "buy_food": episode_buy_food,
+            "reached": bool(env.state.reached) if env.state is not None else False,
+            "path_history": list(env.state.path_history) if env.state is not None else [],
+            "final_position": int(env.state.position) if env.state is not None else -1,
+            "final_day": int(env.state.day) if env.state is not None else -1,
+            "weather_mode": weather_mode,
+        }
+        if trajectory_filter is not None:
+            keep_episode = bool(trajectory_filter(filter_payload))
+            episode_record["accepted_by_filter"] = 1.0 if keep_episode else 0.0
+            if not keep_episode:
+                filtered_episodes += 1
+                if on_episode_end is not None:
+                    episode_record["steps"] = float(episode_steps)
+                    episode_record["mine_days"] = float(episode_mine_days)
+                    episode_record["buy_water"] = float(episode_buy_water)
+                    episode_record["buy_food"] = float(episode_buy_food)
+                    episode_record["success"] = 1.0 if filter_payload["reached"] else 0.0
+                    episode_record["match_rate"] = float(
+                        episode_matched / max(1, episode_total_actions)
+                    )
+                    on_episode_end(ep, dict(episode_record))
+                continue
+        else:
+            episode_record["accepted_by_filter"] = 1.0
+
+        accepted_episodes += 1
+
         returns: List[float] = []
         running_return = 0.0
         for r in reversed(rewards):
@@ -331,6 +384,7 @@ def warmup_with_oracle(
                     "student_buy_water": float(episode_record.get("student_buy_water", 0.0)),
                     "student_buy_food": float(episode_record.get("student_buy_food", 0.0)),
                     "student_success": float(episode_record.get("student_success", 0.0)),
+                    "accepted_by_filter": float(episode_record.get("accepted_by_filter", 1.0)),
                 }
             )
         else:
@@ -403,6 +457,8 @@ def warmup_with_oracle(
         "final_value_loss": float(final_value_loss),
         "value_loss_trend": float(value_loss_trend),
         "match_rate": float(match_rate),
+        "accepted_episodes": float(accepted_episodes),
+        "filtered_episodes": float(filtered_episodes),
         "student_success_rate": float(student_success_rate),
         "student_avg_steps": float(student_avg_steps),
         "student_avg_mine_per_episode": float(student_avg_mine),

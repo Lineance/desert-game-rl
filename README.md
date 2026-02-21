@@ -15,6 +15,7 @@ task2/
 ├── scripts/
 │   ├── train.py       # 训练入口脚本
 │   ├── pretrain.py    # 仅Oracle蒸馏预热入口脚本
+│   ├── level4pipeline.py # Level4三阶段资源约束训练入口
 │   ├── evaluate.py    # 评估入口脚本
 │   ├── benchmark.py   # 基准评测入口脚本
 │   └── validator.py   # 结果校验入口脚本
@@ -108,6 +109,24 @@ uv run python scripts/train.py --level 3 --episodes 2000 --device cuda
 - `--level`：关卡编号（3 或 4）
 - `--episodes`：训练回合数
 - `--device`：`cuda` 或 `cpu`（默认自动选择）
+
+### Level4 三阶段资源约束训练
+
+```bash
+uv run python scripts/level4pipeline.py --stage1-start-node 11 --oracle-time-limit 30
+```
+
+默认行为：
+
+- Stage 1（矿山生存）：`INIT_MONEY=3000`，起点在矿山附近，删除村庄与捷径，先学挖矿生存。
+- Stage 2（寻矿路径）：`INIT_MONEY=5000`，起点恢复，保留绕路地图，并在 warmup 仅保留到达矿山轨迹。
+- Stage 3（全局优化）：`INIT_MONEY=10000`，恢复完整地图，混合少量 warmup 后继续 RL 权衡策略。
+
+输出产物：
+
+- 阶段模型：`artifacts/checkpoints/level4_pipeline_stage{1|2|3}.pt`
+- 最终模型：`artifacts/checkpoints/level4_pipeline_final.pt`
+- 阶段指标：`artifacts/results/level4_pipeline_metrics.csv`
 
 ### 输出
 
