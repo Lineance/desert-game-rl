@@ -217,6 +217,7 @@ class DesertCrossingEnv:
             return self._get_observation(), 0.0, True, False, self._get_info()
 
         action_day = s.day
+        action_weather = s.weather_today
         prev_position = s.position
         prev_dist_to_end = self.dist_to_end[prev_position]
 
@@ -395,9 +396,9 @@ class DesertCrossingEnv:
             s.money += refund
             s.water = 0
             s.food = 0
-            # 终点奖励：显著区分“到达”与“早死/超时”，同时保留资金效率导向
+            # 终点奖励：保持“到达”基线，但显著放大资金效率信号
             money_ratio = s.money / self.config.INIT_MONEY
-            reward += 60.0 + (money_ratio - 1.0) * 10.0
+            reward += 20.0 + (money_ratio - 1.0) * 100.0
 
         # ========== 7. 更新天数和天气 ==========
         if not terminated:
@@ -430,11 +431,7 @@ class DesertCrossingEnv:
                     elif dist_improvement < 0:
                         reward -= 4.0 * abs(dist_improvement)
 
-                    if (
-                        dist_improvement == 0
-                        and not mining
-                        and s.weather_today != Weather.SANDSTORM
-                    ):
+                    if dist_improvement == 0 and not mining and action_weather != Weather.SANDSTORM:
                         reward -= 2.0
 
                 # 生存成本（轻度）

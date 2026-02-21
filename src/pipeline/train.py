@@ -8,13 +8,12 @@ from typing import Any, Dict, List, Optional, TextIO, Tuple
 
 import numpy as np
 import torch
-import torch.nn as nn
 
 from src.env.config import CHECKPOINTS_DIR, LOGS_DIR, RESULTS_DIR, RLConfig
 from src.env.environment import make_env
 from src.models.agent import HybridRNNAgent, create_agent
 from src.models.ppo import PPOTrainer
-from src.pipeline.oracle import solve_theoretical_plan
+from src.pipeline.warmup import warmup_with_oracle
 
 
 def _load_checkpoint(path: Path, device: str) -> Dict[str, Any]:
@@ -58,6 +57,7 @@ def _save_training_state(
     trainer: PPOTrainer,
     episode: int,
     best_return: float,
+    best_net_profit: float,
     stats: Optional[Dict[str, float]],
     epsilon: float,
 ) -> None:
@@ -81,6 +81,7 @@ def _save_training_state(
             },
             "episode": int(episode),
             "best_return": float(best_return),
+            "best_net_profit": float(best_net_profit),
             "epsilon": float(epsilon),
             "stats": stats,
             "config": agent.config,
@@ -128,6 +129,7 @@ def _safe_save_latest(
     trainer: PPOTrainer,
     episode: int,
     best_return: float,
+    best_net_profit: float,
     stats: Optional[Dict[str, float]],
     epsilon: float,
     reason: str,
@@ -139,6 +141,7 @@ def _safe_save_latest(
             trainer,
             episode,
             best_return,
+            best_net_profit,
             stats,
             epsilon,
         )
@@ -189,118 +192,6 @@ def _init_structured_loggers(
         print(f"TensorBoard不可用，已跳过TB日志：{tensorboard_error}")
 
     return csv_file, csv_writer, tb_writer, csv_path, tb_dir
-
-
-def _sanitize_oracle_action(action: Dict[str, Any], env, valid_actions: Dict[str, Any]) -> Dict:
-    move = int(action.get("move", env.state.position))
-    valid_moves = valid_actions.get("valid_moves", []) if valid_actions else []
-    if valid_moves and move not in valid_moves:
-        move = int(env.state.position)
-
-    can_mine = bool(valid_actions.get("can_mine", False)) if valid_actions else False
-    mine = bool(action.get("mine", False)) and can_mine
-
-    if valid_actions and bool(valid_actions.get("can_buy", False)):
-        max_w = int(valid_actions.get("max_buy_water", 0))
-        max_f = int(valid_actions.get("max_buy_food", 0))
-        buy_water = max(0, min(int(action.get("buy_water", 0)), max_w))
-        buy_food = max(0, min(int(action.get("buy_food", 0)), max_f))
-    else:
-        buy_water = 0
-        buy_food = 0
-
-    return {
-        "move": move,
-        "mine": mine,
-        "buy_water": buy_water,
-        "buy_food": buy_food,
-    }
-
-
-def _oracle_warmup(
-    agent: HybridRNNAgent,
-    trainer: PPOTrainer,
-    env,
-    level: int,
-    episodes: int,
-    time_limit: int,
-    device: str,
-) -> None:
-    if episodes <= 0:
-        return
-    if level not in (3, 35, 4):
-        print("Oracle预热仅支持level 3/35/4，已跳过。")
-        return
-
-    agent.train()
-    total_loss = 0.0
-    total_steps = 0
-    solved = 0
-
-    for ep in range(episodes):
-        obs, _ = env.reset(seed=ep)
-        if env.state is None:
-            continue
-
-        weather_seq = list(env.state.weather_future)
-        oracle = solve_theoretical_plan(level, weather_seq, time_limit=time_limit)
-        plan = oracle.get("plan", [])
-        if not plan:
-            if ep % 10 == 0:
-                print(f"Oracle预热: episode={ep}, plan为空，跳过")
-            continue
-
-        solved += 1
-        episode_loss = None
-        episode_steps = 0
-
-        for oracle_action in plan:
-            valid_actions = env.get_valid_actions()
-            action = _sanitize_oracle_action(oracle_action, env, valid_actions)
-
-            obs_tensor = torch.FloatTensor(obs).unsqueeze(0).to(device)
-            state = agent.encode_observation(obs_tensor)
-            action_tensor = {
-                "move": torch.LongTensor([action["move"]]).to(device),
-                "mine": torch.FloatTensor([action["mine"]]).to(device),
-                "buy_water": torch.FloatTensor([action["buy_water"]]).to(device),
-                "buy_food": torch.FloatTensor([action["buy_food"]]).to(device),
-            }
-            log_prob, _ = agent.actor.evaluate_actions(state, action_tensor, valid_actions)
-            step_loss = -log_prob.mean()
-            episode_loss = step_loss if episode_loss is None else episode_loss + step_loss
-
-            next_obs, _, done, truncated, _ = env.step(action)
-            obs = next_obs
-            episode_steps += 1
-            if done or truncated:
-                break
-
-        if episode_loss is None or episode_steps == 0:
-            continue
-
-        trainer.optimizer.zero_grad()
-        episode_loss.backward()
-        nn.utils.clip_grad_norm_(agent.parameters(), trainer.config.MAX_GRAD_NORM)
-        trainer.optimizer.step()
-
-        total_loss += float(episode_loss.item())
-        total_steps += episode_steps
-
-        if ep % 10 == 0:
-            avg_loss = total_loss / max(1, solved)
-            avg_steps = total_steps / max(1, solved)
-            print(
-                f"Oracle预热进度: episode={ep}, solved={solved}, "
-                f"avg_steps={avg_steps:.1f}, avg_loss={avg_loss:.4f}"
-            )
-
-    avg_loss = total_loss / max(1, solved)
-    avg_steps = total_steps / max(1, solved)
-    print(
-        f"Oracle预热完成: episodes={episodes}, solved={solved}, "
-        f"avg_steps={avg_steps:.1f}, avg_loss={avg_loss:.4f}"
-    )
 
 
 def _log_structured_metrics(
@@ -387,6 +278,7 @@ def train(
     trainer = PPOTrainer(agent, config, device=device)
 
     best_return = float("-inf")
+    best_net_profit = float("-inf")
     stats: Optional[Dict[str, float]] = None
     start_episode = 0
     resume_epsilon: Optional[float] = None
@@ -401,6 +293,9 @@ def train(
         _restore_rng_state(checkpoint.get("rng_state"))
         start_episode = int(checkpoint.get("episode", -1)) + 1
         best_return = float(checkpoint.get("best_return", best_return))
+        best_net_profit = float(
+            checkpoint.get("best_net_profit", checkpoint.get("best_final_money", best_net_profit))
+        )
         resume_epsilon = (
             float(checkpoint.get("epsilon")) if checkpoint.get("epsilon") is not None else None
         )
@@ -408,11 +303,14 @@ def train(
 
     if checkpoint is not None and "state_dict" in checkpoint and start_episode == 0:
         best_return = float(checkpoint.get("best_return", best_return))
+        best_net_profit = float(
+            checkpoint.get("best_net_profit", checkpoint.get("best_final_money", best_net_profit))
+        )
         stats = checkpoint.get("stats")
 
     if oracle_warmup_episodes > 0 and start_episode == 0:
         print("开始Oracle蒸馏预热...")
-        _oracle_warmup(
+        warmup_with_oracle(
             agent,
             trainer,
             env,
@@ -482,6 +380,32 @@ def train(
                 epsilon=epsilon,
             )
 
+            # if episode < 10:
+            #     returns = []
+            #     if rollout_buffer.rewards:
+            #         returns, _ = rollout_buffer.compute_returns_and_advantages(
+            #             last_value, gamma=config.GAMMA, gae_lambda=config.GAE_LAMBDA
+            #         )
+            #     belief = getattr(env, "belief_model", None)
+            #     if belief is not None:
+            #         print(
+            #             f"Belief: {belief.current_belief.probs}, "
+            #             f"conf={belief.current_belief.confidence}"
+            #         )
+            #     print(f"\n=== Episode {episode} Debug ===")
+            #     first_action = rollout_buffer.actions[0] if rollout_buffer.actions else None
+            #     print(f"首步动作: {first_action}")
+            #     first_belief = belief.current_belief.probs if belief is not None else "N/A"
+            #     print(f"首步信念: {first_belief}")
+            #     weather_preview = env.state.weather_future[:5] if env.state is not None else []
+            #     print(f"实际天气序列: {weather_preview}")
+            #     print(f"存活天数: {len(rollout_buffer.rewards)}")
+            #     print(f"总回报: {sum(rollout_buffer.rewards)}")
+            #     first_value = rollout_buffer.values[0] if rollout_buffer.values else "N/A"
+            #     print(f"Critic 首步预估价值: {first_value}")
+            #     first_return = returns[0] if returns else "N/A"
+            #     print(f"实际回报(GAE): {first_return}")
+
             if rollout_buffer.rewards:
                 stats = trainer.update(rollout_buffer, last_value)
 
@@ -518,8 +442,9 @@ def train(
             )
             csv_file.flush()
 
-            if episode_info["return"] > best_return:
-                best_return = episode_info["return"]
+            net_profit = float(episode_info.get("net_profit", 0.0))
+            if episode_info.get("reached") and net_profit > best_net_profit:
+                best_net_profit = net_profit
                 agent.save(str(save_dir / f"level{level}_best.pt"))
 
             if episode % log_interval == 0:
@@ -543,7 +468,10 @@ def train(
                     f"均挖矿={rolling_mine:.1f}, 均购买={rolling_buy:.1f}, "
                     f"均购水={rolling_buy_w:.1f}, 均购食={rolling_buy_f:.1f}"
                 )
-                print(f"  最佳回报: {best_return:.1f}")
+                if best_net_profit > float("-inf"):
+                    print(f"  最佳净收益: {best_net_profit:.1f}")
+                else:
+                    print("  最佳净收益: N/A")
                 print(
                     f"  本回合: 奖励={episode_info['return']:.1f}, "
                     f"到达={episode_info['reached']}, 步数={episode_info['length']}, 天数={episode_info['final_day']}, "
@@ -574,6 +502,7 @@ def train(
                     trainer,
                     episode,
                     best_return,
+                    best_net_profit,
                     stats,
                     epsilon,
                 )
@@ -593,6 +522,7 @@ def train(
             trainer,
             last_completed_episode,
             best_return,
+            best_net_profit,
             stats,
             last_epsilon,
             reason="keyboard_interrupt",
@@ -610,6 +540,7 @@ def train(
             trainer,
             last_completed_episode,
             best_return,
+            best_net_profit,
             stats,
             last_epsilon,
             reason="exception",
@@ -626,6 +557,7 @@ def train(
         trainer,
         num_episodes - 1,
         best_return,
+        best_net_profit,
         stats,
         _compute_epsilon(num_episodes - 1, eps_start, eps_end, eps_decay_episodes),
     )
