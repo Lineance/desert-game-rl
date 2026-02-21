@@ -14,6 +14,7 @@
 task2/
 ├── scripts/
 │   ├── train.py       # 训练入口脚本
+│   ├── pretrain.py    # 仅Oracle蒸馏预热入口脚本
 │   ├── evaluate.py    # 评估入口脚本
 │   ├── benchmark.py   # 基准评测入口脚本
 │   └── validator.py   # 结果校验入口脚本
@@ -78,6 +79,15 @@ uv sync --group dev
 ---
 
 ## 训练
+
+### 仅预训练并保存
+
+```bash
+# 仅进行Oracle蒸馏预热并保存
+uv run python scripts/pretrain.py --level 3 --warmup-episodes 300
+```
+
+默认输出：`artifacts/checkpoints/level{n}_pretrained.pt`
 
 ### 命令
 

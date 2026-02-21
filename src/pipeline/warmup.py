@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import torch
 import torch.nn.functional as F
@@ -49,21 +49,65 @@ def warmup_with_oracle(
     value_weight: float = 0.1,
     log_interval: int = 10,
     metrics: Optional[List[Dict[str, float]]] = None,
-) -> None:
+    on_episode_end: Optional[Callable[[int, Dict[str, float]], None]] = None,
+) -> Dict[str, float]:
     if episodes <= 0:
-        return
+        return {
+            "episodes": 0.0,
+            "solved": 0.0,
+            "success_rate": 0.0,
+            "avg_steps": 0.0,
+            "avg_mine_per_episode": 0.0,
+            "avg_buy_water": 0.0,
+            "avg_buy_food": 0.0,
+            "avg_value_loss": 0.0,
+            "final_value_loss": 0.0,
+            "value_loss_trend": 0.0,
+            "match_rate": 0.0,
+        }
     if level not in (3, 35, 4):
         print("Oracle预热仅支持level 3/35/4，已跳过。")
-        return
+        return {
+            "episodes": float(episodes),
+            "solved": 0.0,
+            "success_rate": 0.0,
+            "avg_steps": 0.0,
+            "avg_mine_per_episode": 0.0,
+            "avg_buy_water": 0.0,
+            "avg_buy_food": 0.0,
+            "avg_value_loss": 0.0,
+            "final_value_loss": 0.0,
+            "value_loss_trend": 0.0,
+            "match_rate": 0.0,
+        }
 
     agent.train()
     total_loss = 0.0
     total_steps = 0
     solved = 0
+    success = 0
+    total_mine_days = 0
+    total_buy_water = 0
+    total_buy_food = 0
+    matched_actions = 0
+    total_actions = 0
+    value_losses: List[float] = []
 
     for ep in range(episodes):
+        episode_record: Dict[str, float] = {
+            "episode": float(ep),
+            "solved": 0.0,
+            "success": 0.0,
+            "steps": 0.0,
+            "mine_days": 0.0,
+            "buy_water": 0.0,
+            "buy_food": 0.0,
+            "match_rate": 0.0,
+        }
         obs, _ = env.reset(seed=ep)
         if env.state is None:
+            if on_episode_end is not None:
+                on_episode_end(ep, dict(episode_record))
             continue
 
         weather_seq = list(env.state.weather_future)
@@ -72,10 +116,19 @@ def warmup_with_oracle(
         if not plan:
             if ep % log_interval == 0:
                 print(f"Oracle预热: episode={ep}, plan为空，跳过")
+            if on_episode_end is not None:
+                on_episode_end(ep, dict(episode_record))
             continue
 
         solved += 1
+        episode_record["solved"] = 1.0
         episode_steps = 0
+        episode_mine_days = 0
+        episode_buy_water = 0
+        episode_buy_food = 0
+        episode_matched = 0
+        episode_total_actions = 0
+        episode_success = 0
         log_probs: List[torch.Tensor] = []
         values: List[torch.Tensor] = []
         rewards: List[float] = []
@@ -83,6 +136,30 @@ def warmup_with_oracle(
         for oracle_action in plan:
             valid_actions = env.get_valid_actions()
             action = _sanitize_oracle_action(oracle_action, env, valid_actions)
+
+            pred_action, _ = agent.select_action(obs, valid_actions, deterministic=True)
+            move_match = int(pred_action.get("move", env.state.position)) == int(action["move"])
+            if action["buy_water"] == 0:
+                water_match = int(pred_action.get("buy_water", 0)) == 0
+            else:
+                water_match = (
+                    abs(int(pred_action.get("buy_water", 0)) - int(action["buy_water"]))
+                    / max(1.0, float(action["buy_water"]))
+                    <= 0.1
+                )
+            if action["buy_food"] == 0:
+                food_match = int(pred_action.get("buy_food", 0)) == 0
+            else:
+                food_match = (
+                    abs(int(pred_action.get("buy_food", 0)) - int(action["buy_food"]))
+                    / max(1.0, float(action["buy_food"]))
+                    <= 0.1
+                )
+            if move_match and water_match and food_match:
+                matched_actions += 1
+                episode_matched += 1
+            total_actions += 1
+            episode_total_actions += 1
 
             obs_tensor = torch.FloatTensor(obs).unsqueeze(0).to(device)
             state = agent.encode_observation(obs_tensor)
@@ -98,6 +175,15 @@ def warmup_with_oracle(
             values.append(value.squeeze(0))
 
             next_obs, reward, done, truncated, _ = env.step(action)
+            last_action = env.state.last_action if env.state is not None else None
+            if isinstance(last_action, dict):
+                if bool(last_action.get("mine", False)):
+                    total_mine_days += 1
+                    episode_mine_days += 1
+                total_buy_water += int(last_action.get("buy_water", 0))
+                total_buy_food += int(last_action.get("buy_food", 0))
+                episode_buy_water += int(last_action.get("buy_water", 0))
+                episode_buy_food += int(last_action.get("buy_food", 0))
             rewards.append(float(reward))
             obs = next_obs
             episode_steps += 1
@@ -105,6 +191,9 @@ def warmup_with_oracle(
                 break
 
         if episode_steps == 0 or not log_probs or not values:
+            if on_episode_end is not None:
+                episode_record["steps"] = float(episode_steps)
+                on_episode_end(ep, dict(episode_record))
             continue
 
         returns: List[float] = []
@@ -118,6 +207,7 @@ def warmup_with_oracle(
         values_tensor = torch.stack(values)
         value_loss = F.mse_loss(values_tensor, returns_tensor)
         episode_loss = policy_loss + value_weight * value_loss
+        value_losses.append(float(value_loss.item()))
 
         trainer.optimizer.zero_grad()
         episode_loss.backward()
@@ -128,6 +218,15 @@ def warmup_with_oracle(
         total_steps += episode_steps
 
         if metrics is not None:
+            if env.state is not None and bool(env.state.reached):
+                episode_success = 1
+            episode_record["steps"] = float(episode_steps)
+            episode_record["mine_days"] = float(episode_mine_days)
+            episode_record["buy_water"] = float(episode_buy_water)
+            episode_record["buy_food"] = float(episode_buy_food)
+            episode_record["success"] = float(episode_success)
+            episode_record["match_rate"] = float(episode_matched / max(1, episode_total_actions))
+            episode_record["value_loss"] = float(value_loss.item())
             metrics.append(
                 {
                     "episode": float(ep),
@@ -141,20 +240,69 @@ def warmup_with_oracle(
                     "first_return": float(returns_tensor[0].item())
                     if len(returns_tensor) > 0
                     else float("nan"),
+                    "mine_days": float(episode_mine_days),
+                    "buy_water": float(episode_buy_water),
+                    "buy_food": float(episode_buy_food),
+                    "success": float(episode_success),
+                    "match_rate": float(episode_matched / max(1, episode_total_actions)),
                 }
             )
+        else:
+            if env.state is not None and bool(env.state.reached):
+                episode_success = 1
+            episode_record["steps"] = float(episode_steps)
+            episode_record["mine_days"] = float(episode_mine_days)
+            episode_record["buy_water"] = float(episode_buy_water)
+            episode_record["buy_food"] = float(episode_buy_food)
+            episode_record["success"] = float(episode_success)
+            episode_record["match_rate"] = float(episode_matched / max(1, episode_total_actions))
+            episode_record["value_loss"] = float(value_loss.item())
 
         if ep % log_interval == 0:
             avg_loss = total_loss / max(1, solved)
             avg_steps = total_steps / max(1, solved)
+            avg_mine = total_mine_days / max(1, solved)
+            match_rate = matched_actions / max(1, total_actions)
             print(
                 f"Oracle预热进度: episode={ep}, solved={solved}, "
-                f"avg_steps={avg_steps:.1f}, avg_loss={avg_loss:.4f}"
+                f"avg_steps={avg_steps:.1f}, avg_mine={avg_mine:.2f}, "
+                f"match_rate={match_rate:.2%}, avg_loss={avg_loss:.4f}"
             )
+
+        if env.state is not None and bool(env.state.reached):
+            success += 1
+
+        if on_episode_end is not None:
+            on_episode_end(ep, dict(episode_record))
 
     avg_loss = total_loss / max(1, solved)
     avg_steps = total_steps / max(1, solved)
+    avg_mine = total_mine_days / max(1, solved)
+    avg_buy_water = total_buy_water / max(1, solved)
+    avg_buy_food = total_buy_food / max(1, solved)
+    success_rate = success / max(1, solved)
+    match_rate = matched_actions / max(1, total_actions)
+    avg_value_loss = sum(value_losses) / max(1, len(value_losses))
+    final_value_loss = value_losses[-1] if value_losses else 0.0
+    value_loss_trend = value_losses[-1] - value_losses[0] if len(value_losses) >= 2 else 0.0
     print(
         f"Oracle预热完成: episodes={episodes}, solved={solved}, "
-        f"avg_steps={avg_steps:.1f}, avg_loss={avg_loss:.4f}"
+        f"success_rate={success_rate:.2%}, avg_steps={avg_steps:.1f}, "
+        f"avg_mine={avg_mine:.2f}, avg_buy_w={avg_buy_water:.1f}, "
+        f"avg_buy_f={avg_buy_food:.1f}, match_rate={match_rate:.2%}, avg_loss={avg_loss:.4f}"
     )
+
+    return {
+        "episodes": float(episodes),
+        "solved": float(solved),
+        "success_rate": float(success_rate),
+        "avg_steps": float(avg_steps),
+        "avg_mine_per_episode": float(avg_mine),
+        "avg_buy_water": float(avg_buy_water),
+        "avg_buy_food": float(avg_buy_food),
+        "avg_value_loss": float(avg_value_loss),
+        "final_value_loss": float(final_value_loss),
+        "value_loss_trend": float(value_loss_trend),
+        "match_rate": float(match_rate),
+    }
+

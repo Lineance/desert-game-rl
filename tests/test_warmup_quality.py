@@ -1,6 +1,7 @@
 import math
 from typing import List
 
+import pytest
 import torch
 
 from src.env.environment import make_env
@@ -50,6 +51,7 @@ def _collect_oracle_rollout(env, seq: List[int]) -> List[float]:
     return rewards
 
 
+@pytest.mark.slow
 def test_warmup_critic_mc_smoke(monkeypatch):
     env = make_env(level=3, weather_mode="no_sandstorm", seed=0)
     seq = _fixed_sequence(env.config.NUM_DAYS)
@@ -64,8 +66,8 @@ def test_warmup_critic_mc_smoke(monkeypatch):
         trainer,
         env,
         level=3,
-        episodes=20,
-        time_limit=10,
+        episodes=100,
+        time_limit=30,
         device="cpu",
         log_interval=1000,
         metrics=metrics,
@@ -97,6 +99,7 @@ def test_warmup_critic_mc_smoke(monkeypatch):
     assert abs(value - target) / denom < 0.5
 
 
+@pytest.mark.slow
 def test_warmup_behavior_cloning_match_rate(monkeypatch):
     env = make_env(level=3, weather_mode="no_sandstorm", seed=0)
     seq = _fixed_sequence(env.config.NUM_DAYS)
@@ -110,7 +113,7 @@ def test_warmup_behavior_cloning_match_rate(monkeypatch):
         trainer,
         env,
         level=3,
-        episodes=20,
+        episodes=100,
         time_limit=10,
         device="cpu",
         log_interval=1000,

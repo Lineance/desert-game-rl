@@ -9,11 +9,45 @@ from typing import Any, Dict, List, Optional, TextIO, Tuple
 import numpy as np
 import torch
 
-from src.env.config import CHECKPOINTS_DIR, LOGS_DIR, RESULTS_DIR, RLConfig
+from src.env.config import (
+    CHECKPOINTS_DIR,
+    LOGS_DIR,
+    RESULTS_DIR,
+    Level3Config,
+    Level4Config,
+    Level35Config,
+    RLConfig,
+)
 from src.env.environment import make_env
 from src.models.agent import HybridRNNAgent, create_agent
 from src.models.ppo import PPOTrainer
 from src.pipeline.warmup import warmup_with_oracle
+
+
+def _resolve_weather_mode(level: int, requested_mode: Optional[str]) -> str:
+    if level == 3:
+        modes = Level3Config.WEATHER_MODES
+        preferred_default = "no_sandstorm"
+    elif level == 35:
+        modes = Level35Config.WEATHER_MODES
+        preferred_default = "train_medium"
+    elif level == 4:
+        modes = Level4Config.WEATHER_MODES
+        preferred_default = "balanced"
+    else:
+        raise ValueError(f"Unknown level: {level}")
+
+    if requested_mode is not None:
+        mode = requested_mode.strip()
+        if mode in modes:
+            return mode
+        fallback = preferred_default if preferred_default in modes else next(iter(modes.keys()))
+        print(f"未识别weather_mode='{requested_mode}'，已回退到'{fallback}'")
+        return fallback
+
+    if preferred_default in modes:
+        return preferred_default
+    return next(iter(modes.keys()))
 
 
 def _load_checkpoint(path: Path, device: str) -> Dict[str, Any]:
@@ -258,7 +292,8 @@ def train(
     save_dir.mkdir(parents=True, exist_ok=True)
 
     config = RLConfig()
-    env = make_env(level=level, seed=42, weather_mode=weather_mode or "balanced")
+    selected_mode = _resolve_weather_mode(level, weather_mode)
+    env = make_env(level=level, seed=42, weather_mode=selected_mode)
 
     resume_path = _resolve_resume_path(resume, level)
     checkpoint = None
@@ -337,7 +372,6 @@ def train(
     print("=" * 60)
     print("训练开始")
     available_modes = ", ".join(sorted(env.config.WEATHER_MODES.keys()))
-    selected_mode = weather_mode or "balanced"
     print(f"天气模式: {selected_mode} (可选: {available_modes})")
     print("=" * 60)
 
