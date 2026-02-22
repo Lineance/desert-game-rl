@@ -286,8 +286,7 @@ class DesertCrossingEnv:
         if is_moving:
             # 先检查沙暴，再移动
             if s.weather_today == Weather.SANDSTORM:
-                reward -= 50.0
-                is_moving = False  # 强制停留，不移动
+                reward -= 20.0
             elif move_target in self.neighbors[s.position]:
                 s.position = move_target
                 action_name = "移动"
@@ -324,7 +323,7 @@ class DesertCrossingEnv:
         # 检查资源
         if s.water < water_cons or s.food < food_cons:
             s.terminated = True
-            reward -= 50.0
+            reward -= 100.0
             s.last_action = {
                 "move_from": prev_position,
                 "move_to": s.position,
@@ -345,18 +344,19 @@ class DesertCrossingEnv:
         # 挖矿收益
         if mining:
             s.money += self.config.MINE_INCOME
-            reward += max(1.0, self.config.MINE_INCOME / 50.0)
+            reward += max(3.0, self.config.MINE_INCOME / 50.0)
             if "挖矿" not in s.action_history:
-                reward += 3.0
+                reward += 5.0
 
         # ========== 4. 购买处理（第1天及以后，仅村庄）==========
         # 第0天的购买已在前面处理，起点不能重复购买
         if s.day >= 1 and (buy_water > 0 or buy_food > 0):
             at_village = s.position in self.config.VILLAGES
-
             if at_village:
                 cost = self._compute_purchase_cost(buy_water, buy_food, False)
                 if cost <= s.money:
+                    if "购买" not in s.action_history:
+                        reward += 5.0
                     new_weight = (s.water + buy_water) * self.config.WATER_WEIGHT + (
                         s.food + buy_food
                     ) * self.config.FOOD_WEIGHT
@@ -367,6 +367,10 @@ class DesertCrossingEnv:
                         executed_buy_water = int(buy_water)
                         executed_buy_food = int(buy_food)
                         action_name += "+购买" if action_name != "停留" else "购买"
+                        reward += 1.0
+
+        if ((not do_mine) or (not (buy_water > 0 or buy_food > 0))) and (not is_moving):
+            reward -= 1
 
         # ========== 5. 更新记录 ==========
         s.path_history.append(s.position)
@@ -398,7 +402,7 @@ class DesertCrossingEnv:
             s.food = 0
             # 终点奖励：保持“到达”基线，但显著放大资金效率信号
             money_ratio = s.money / self.config.INIT_MONEY
-            reward += 20.0 + (money_ratio - 1.0) * 100.0
+            reward += 20 + (money_ratio - 1.0) * 100
 
         # ========== 7. 更新天数和天气 ==========
         if not terminated:
@@ -409,7 +413,7 @@ class DesertCrossingEnv:
                 s.terminated = True
                 terminated = True
                 if not s.reached:
-                    reward -= 50.0  # 未到达终点惩罚
+                    reward -= 100.0  # 未到达终点惩罚
                 # 如果已到达，前面已处理，不再惩罚
             else:
                 # 更新天气
@@ -418,27 +422,27 @@ class DesertCrossingEnv:
                 self.belief_model.update(s.weather_today)
 
                 # 奖励设计（修复探索崩溃：强制前进）
-                if len(s.path_history) > 1:
-                    prev_dist = prev_dist_to_end
-                    curr_dist = self.dist_to_end[s.position]
-                    dist_improvement = prev_dist - curr_dist  # 正数表示靠近
+                # if len(s.path_history) > 1:
+                #     prev_dist = prev_dist_to_end
+                #     curr_dist = self.dist_to_end[s.position]
+                #     dist_improvement = prev_dist - curr_dist  # 正数表示靠近
 
-                    if is_moving and s.position in self.config.MINES:
-                        reward += 2.0
+                #     if is_moving and s.position in self.config.MINES:
+                #         reward += 2.0
 
-                    if dist_improvement > 0:
-                        reward += 8.0 * dist_improvement
-                    elif dist_improvement < 0:
-                        reward -= 4.0 * abs(dist_improvement)
+                #     if dist_improvement > 0:
+                #         reward += 8.0 * dist_improvement
+                #     elif dist_improvement < 0:
+                #         reward -= 4.0 * abs(dist_improvement)
 
-                    if dist_improvement == 0 and not mining and action_weather != Weather.SANDSTORM:
-                        reward -= 2.0
+                #     if dist_improvement == 0 and not mining and action_weather != Weather.SANDSTORM:
+                #         reward -= 2.0
 
-                # 生存成本（轻度）
-                reward -= 1.0
+                # # 生存成本（轻度）
+                # reward -= 1.0
 
-                # 时间压力（轻度）
-                reward -= (s.day / self.config.NUM_DAYS) * 4.0
+                # # 时间压力（轻度）
+                # reward -= (s.day / self.config.NUM_DAYS) * 4.0
 
         info = self._get_info()
         info["action_day"] = action_day
