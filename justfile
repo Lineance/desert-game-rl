@@ -37,8 +37,8 @@ eval model level="3" seed="42":
     uv run python scripts/evaluate.py {{model}} --level {{level}} --verbose --seed {{seed}}
 
 # 基准测试
-bench model level="3":
-    uv run python scripts/benchmark.py {{model}} --level {{level}} --runs 500
+bench model level="4":
+    uv run python scripts/benchmark.py {{model}} --level {{level}} --runs 30 --with-oracle
 
 # 验证结果文件
 validate file level="3":

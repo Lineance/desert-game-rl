@@ -69,14 +69,14 @@ def _load_checkpoint(path: Path, device: str) -> Dict[str, Any]:
     return checkpoint
 
 
-def _resolve_resume_path(resume: Optional[str], level: int) -> Optional[Path]:
+def _resolve_resume_path(resume: Optional[str], level: int, output_dir: Path) -> Optional[Path]:
     if resume is None:
         return None
     resume = resume.strip()
     if not resume:
         return None
     if resume.lower() == "latest":
-        return CHECKPOINTS_DIR / f"level{level}_latest.pt"
+        return output_dir / f"level{level}_latest.pt"
     return Path(resume)
 
 
@@ -512,6 +512,7 @@ def train(
     log_interval: int = 100,
     resume: Optional[str] = None,
     checkpoint_interval: int = 100,
+    output_dir: Optional[str] = None,
     weather_mode: Optional[str] = None,
     oracle_warmup_episodes: int = 0,
     oracle_time_limit: int = 20,
@@ -525,7 +526,7 @@ def train(
     if device is None:
         device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    save_dir = CHECKPOINTS_DIR
+    save_dir = Path(output_dir).expanduser() if output_dir is not None else CHECKPOINTS_DIR
     save_dir.mkdir(parents=True, exist_ok=True)
 
     config = RLConfig()
@@ -537,7 +538,7 @@ def train(
     )
     current_curriculum_stage_id = 0
 
-    resume_path = _resolve_resume_path(resume, level)
+    resume_path = _resolve_resume_path(resume, level, save_dir)
     checkpoint = None
     if resume_path is not None and resume_path.exists():
         checkpoint = _load_checkpoint(resume_path, device)
@@ -639,6 +640,7 @@ def train(
 
     print("=" * 60)
     print("训练开始")
+    print(f"模型输出目录: {save_dir}")
     available_modes = ", ".join(sorted(env.config.WEATHER_MODES.keys()))
     if curriculum_enabled:
         print(f"课程学习: 开启, 阶段模式={curriculum_stage_modes}")
@@ -1044,6 +1046,12 @@ def main() -> None:
     )
     parser.add_argument("--checkpoint-interval", type=int, default=100)
     parser.add_argument(
+        "--output-dir",
+        type=str,
+        default=None,
+        help="模型输出目录（best/latest/final/episode断点）",
+    )
+    parser.add_argument(
         "--weather-mode",
         type=str,
         default=None,
@@ -1099,6 +1107,7 @@ def main() -> None:
         log_interval=args.log_interval,
         resume=args.resume,
         checkpoint_interval=args.checkpoint_interval,
+        output_dir=args.output_dir,
         weather_mode=args.weather_mode,
         oracle_warmup_episodes=args.oracle_warmup_episodes,
         oracle_time_limit=args.oracle_time_limit,

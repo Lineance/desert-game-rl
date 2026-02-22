@@ -8,6 +8,7 @@ from src.env.environment import make_env
 from src.models.agent import create_agent
 from src.models.belief import WeatherBeliefModel
 from src.models.ppo import PPOTrainer
+from src.pipeline import warmup as warmup_mod
 from src.pipeline.oracle import solve_theoretical_plan
 from src.pipeline.warmup import _sanitize_oracle_action, warmup_with_oracle
 
@@ -174,3 +175,39 @@ def test_warmup_behavior_cloning_match_rate(monkeypatch):
     assert total > 0
     match_rate = matched / total
     assert match_rate > 0.85
+
+
+def test_warmup_skips_non_optimal_oracle_solution(monkeypatch):
+    env = make_env(level=3, weather_mode="no_sandstorm", seed=0)
+    agent = create_agent(env, config=None, device="cpu")
+    trainer = PPOTrainer(agent, config=None, device="cpu")
+
+    monkeypatch.setattr(
+        warmup_mod,
+        "solve_theoretical_plan",
+        lambda *args, **kwargs: {
+            "status": "Not Solved",
+            "reached": True,
+            "reach_day": 4,
+            "plan": [
+                {"move": 0, "mine": False, "buy_water": 0, "buy_food": 0},
+                {"move": 0, "mine": False, "buy_water": 0, "buy_food": 0},
+            ],
+        },
+    )
+
+    summary = warmup_with_oracle(
+        agent,
+        trainer,
+        env,
+        level=3,
+        episodes=3,
+        time_limit=1,
+        device="cpu",
+        log_interval=1000,
+    )
+
+    assert summary["episodes"] == 3.0
+    assert summary["solved"] == 0.0
+    assert summary["avg_steps"] == 0.0
+    assert summary["success_rate"] == 0.0

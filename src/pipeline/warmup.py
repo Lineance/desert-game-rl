@@ -188,10 +188,17 @@ def warmup_with_oracle(
 
         weather_seq = list(env.state.weather_future)
         oracle = solve_theoretical_plan(level, weather_seq, time_limit=time_limit)
+        oracle_status = str(oracle.get("status", "Unknown"))
+        oracle_reached = bool(oracle.get("reached", False))
         plan = oracle.get("plan", [])
-        if not plan:
+        oracle_exact_solved = oracle_status.lower() == "optimal" and oracle_reached and bool(plan)
+        if not oracle_exact_solved:
             if ep % log_interval == 0:
-                print(f"Oracle预热: episode={ep}, plan为空，跳过")
+                print(
+                    "Oracle预热: "
+                    f"episode={ep}, status={oracle_status}, reached={oracle_reached}, "
+                    f"plan_len={len(plan)}, 非精确解，跳过"
+                )
             if on_episode_end is not None:
                 on_episode_end(ep, dict(episode_record))
             continue
@@ -354,7 +361,7 @@ def warmup_with_oracle(
             student_success_rate = student_success / max(1, student_eval_episodes)
             print(
                 f"Oracle预热进度: episode={ep}, solved={solved}, "
-                f"avg_steps={avg_steps:.1f}, avg_mine={avg_mine:.2f}, "
+                f"avg_steps(exact)={avg_steps:.1f}, avg_mine={avg_mine:.2f}, "
                 f"match_rate={match_rate:.2%}, avg_loss={avg_loss:.4f}; "
                 f"student(avg_steps={student_avg_steps:.1f}, avg_mine={student_avg_mine:.2f}, "
                 f"success={student_success_rate:.2%}, eval_points={student_eval_episodes})"
@@ -383,7 +390,7 @@ def warmup_with_oracle(
     student_success_rate = student_success / max(1, student_eval_episodes)
     print(
         f"Oracle预热完成: episodes={episodes}, solved={solved}, "
-        f"success_rate={success_rate:.2%}, avg_steps={avg_steps:.1f}, "
+        f"success_rate={success_rate:.2%}, avg_steps(exact)={avg_steps:.1f}, "
         f"avg_mine={avg_mine:.2f}, avg_buy_w={avg_buy_water:.1f}, "
         f"avg_buy_f={avg_buy_food:.1f}, match_rate={match_rate:.2%}, avg_loss={avg_loss:.4f}; "
         f"student(success_rate={student_success_rate:.2%}, avg_steps={student_avg_steps:.1f}, "
