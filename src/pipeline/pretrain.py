@@ -212,10 +212,17 @@ def warmup_with_oracle(
 
         weather_seq = list(env.state.weather_future)
         oracle = solve_theoretical_plan(level, weather_seq, time_limit=time_limit)
+        oracle_status = str(oracle.get("status", "Unknown"))
+        oracle_reached = bool(oracle.get("reached", False))
         plan = oracle.get("plan", [])
-        if not plan:
+        oracle_exact_solved = oracle_status.lower() == "optimal" and oracle_reached and bool(plan)
+        if not oracle_exact_solved:
             if ep % log_interval == 0:
-                print(f"Oracle预热: episode={ep}, plan为空，跳过")
+                print(
+                    "Oracle预热: "
+                    f"episode={ep}, status={oracle_status}, reached={oracle_reached}, "
+                    f"plan_len={len(plan)}, 非精确解，跳过"
+                )
             if on_episode_end is not None:
                 on_episode_end(ep, dict(episode_record))
             continue
