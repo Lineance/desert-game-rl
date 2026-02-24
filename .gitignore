@@ -14,6 +14,7 @@ venv/
 .coverage
 htmlcov/
 .hypothesis
+profiles/
 
 # Build artifacts
 dist/
