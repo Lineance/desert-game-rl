@@ -56,6 +56,7 @@ quote-style = "double"    # 使用双引号
 testpaths = ["tests"]     # 测试文件放在 tests/ 文件夹
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "random: randomly failed test"
 ]
 addopts = "-v --tb=short -m 'not slow'" # -v: 显示详细测试名，--tb=short: 错误信息简短
 

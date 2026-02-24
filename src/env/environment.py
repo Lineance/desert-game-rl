@@ -217,9 +217,7 @@ class DesertCrossingEnv:
             return self._get_observation(), 0.0, True, False, self._get_info()
 
         action_day = s.day
-        action_weather = s.weather_today
         prev_position = s.position
-        prev_dist_to_end = self.dist_to_end[prev_position]
 
         # 解析动作
         move_target = action.get("move", s.position)

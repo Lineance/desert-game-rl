@@ -183,7 +183,6 @@ def test_warmup_skips_non_optimal_oracle_solution(monkeypatch):
     trainer = PPOTrainer(agent, config=None, device="cpu")
 
     monkeypatch.setattr(
-        warmup_mod,
         "solve_theoretical_plan",
         lambda *args, **kwargs: {
             "status": "Not Solved",
