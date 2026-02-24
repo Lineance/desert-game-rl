@@ -335,7 +335,7 @@ def _build_adjacency_from_config(config_cls) -> Dict[int, Set[int]]:
     return adjacency
 
 
-def build_validation_config(level: int) -> ValidationConfig:
+def _build_validation_config(level: int) -> ValidationConfig:
     if level == 3:
         cfg = Level3Config
         name = "第三关"
@@ -361,7 +361,7 @@ def build_validation_config(level: int) -> ValidationConfig:
     )
 
 
-def read_result_file(path: str) -> pd.DataFrame:
+def _read_result_file(path: str) -> pd.DataFrame:
     file_path = Path(path)
     if not file_path.exists():
         raise FileNotFoundError(f"文件不存在: {path}")
@@ -371,14 +371,14 @@ def read_result_file(path: str) -> pd.DataFrame:
     return pd.read_excel(file_path)
 
 
-def main() -> None:
+def validator_main() -> None:
     parser = argparse.ArgumentParser(description="task2 结果验证器")
     parser.add_argument("file", type=str, help="待验证结果文件（CSV/XLSX）")
     parser.add_argument("--level", type=int, choices=[3, 4], default=3, help="关卡编号")
     args = parser.parse_args()
 
-    config = build_validation_config(args.level)
-    df = read_result_file(args.file)
+    config = _build_validation_config(args.level)
+    df = _read_result_file(args.file)
     validator = RLResultValidator(df, config)
     ok = validator.validate()
 
@@ -401,4 +401,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    validator_main()

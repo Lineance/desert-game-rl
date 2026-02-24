@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import src.pipeline.evaluate as evaluate
+import src.pipeline.rollout as rollout
 
 
 class _FakeAgent:
@@ -24,7 +25,7 @@ def test_evaluate_multiple_runs_uses_incremental_seeds(monkeypatch):
             "path": [1, 2, 3],
         }
 
-    monkeypatch.setattr(evaluate.HybridRNNAgent, "load", staticmethod(fake_load))
+    monkeypatch.setattr(evaluate.Agent, "load", staticmethod(fake_load))
     monkeypatch.setattr(evaluate, "run_episode", fake_run_episode)
 
     results = evaluate.evaluate_multiple_runs("dummy.pt", level=3, num_runs=4, device="cpu")
@@ -56,12 +57,12 @@ def test_generate_result_excel_selects_best_reached(monkeypatch, tmp_path):
         captured["filepath"] = filepath
         captured["level"] = level
 
-    monkeypatch.setattr(evaluate.HybridRNNAgent, "load", staticmethod(fake_load))
-    monkeypatch.setattr(evaluate, "run_episode", fake_run_episode)
-    monkeypatch.setattr(evaluate, "export_to_xlsx", fake_export)
-    monkeypatch.setattr(evaluate, "analyze_strategy", lambda result, env: None)
+    monkeypatch.setattr(rollout.Agent, "load", staticmethod(fake_load))
+    monkeypatch.setattr(rollout, "run_episode", fake_run_episode)
+    monkeypatch.setattr(rollout, "_export_to_xlsx", fake_export)
+    monkeypatch.setattr(rollout, "_analyze_strategy", lambda result, env: None)
 
-    result = evaluate.generate_result_excel(
+    result = rollout._generate_result_excel(
         "dummy.pt", level=3, output_dir=str(tmp_path), device="cpu"
     )
 
@@ -87,12 +88,12 @@ def test_generate_result_excel_fallback_when_no_reached(monkeypatch, tmp_path):
             "path": [1, 2, 3],
         }
 
-    monkeypatch.setattr(evaluate.HybridRNNAgent, "load", staticmethod(fake_load))
-    monkeypatch.setattr(evaluate, "run_episode", fake_run_episode)
-    monkeypatch.setattr(evaluate, "export_to_xlsx", lambda result, filepath, level: None)
-    monkeypatch.setattr(evaluate, "analyze_strategy", lambda result, env: None)
+    monkeypatch.setattr(rollout.Agent, "load", staticmethod(fake_load))
+    monkeypatch.setattr(rollout, "run_episode", fake_run_episode)
+    monkeypatch.setattr(rollout, "_export_to_xlsx", lambda result, filepath, level: None)
+    monkeypatch.setattr(rollout, "_analyze_strategy", lambda result, env: None)
 
-    result = evaluate.generate_result_excel(
+    result = rollout._generate_result_excel(
         "dummy.pt", level=3, output_dir=str(tmp_path), device="cpu"
     )
 

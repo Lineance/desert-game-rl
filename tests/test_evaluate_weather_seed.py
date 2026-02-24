@@ -1,7 +1,7 @@
 import torch
 
 from src.env.environment import make_env
-from src.pipeline.evaluate import run_episode
+from src.pipeline.rollout import run_episode
 
 
 class _StayAndBuyAgent(torch.nn.Module):

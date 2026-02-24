@@ -69,7 +69,7 @@ def _validate_weather_config(config_cls):
 
 def _assert_oracle_feasible(config_cls, time_limit=60, samples_per_mode=2):
     pytest.importorskip("pulp")
-    from src.pipeline.oracle import solve_theoretical_optimal_with_config
+    from src.utils.oracle import solve_theoretical_optimal_with_config
 
     def _sample_weather_sequence(mode, rng):
         probs = config_cls.WEATHER_MODES[mode]

@@ -1,9 +1,9 @@
 from .env.config import Level3Config, Level4Config, RLConfig
 from .env.environment import DesertCrossingEnv, make_env
-from .models.agent import HybridRNNAgent, create_agent
+from .models.agent import Agent, create_agent
 from .models.belief import WeatherBeliefModel, extract_belief_features
 from .models.ppo import PPOTrainer, RolloutBuffer
-from .pipeline.validator import RLResultValidator, build_validation_config
+from .utils.validator import RLResultValidator, _build_validation_config
 
 __all__ = [
     "Level3Config",
@@ -13,10 +13,10 @@ __all__ = [
     "make_env",
     "WeatherBeliefModel",
     "extract_belief_features",
-    "HybridRNNAgent",
+    "Agent",
     "create_agent",
     "PPOTrainer",
     "RolloutBuffer",
     "RLResultValidator",
-    "build_validation_config",
+    "_build_validation_config",
 ]

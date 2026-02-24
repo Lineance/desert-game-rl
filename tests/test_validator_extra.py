@@ -1,10 +1,10 @@
 import pandas as pd
 import pytest
 
-from src.pipeline.validator import (
+from src.utils.validator import (
     RLResultValidator,
-    build_validation_config,
-    read_result_file,
+    _build_validation_config,
+    _read_result_file,
 )
 
 
@@ -32,7 +32,7 @@ def test_parse_action_supports_move_mine_buy():
 
 
 def test_normalize_columns_supports_english_aliases():
-    cfg = build_validation_config(3)
+    cfg = _build_validation_config(3)
     df = pd.DataFrame(
         [
             {
@@ -60,16 +60,16 @@ def test_normalize_columns_supports_english_aliases():
 
 
 def test_read_result_file_csv_and_missing(tmp_path):
-    cfg = build_validation_config(3)
+    cfg = _build_validation_config(3)
     csv_path = tmp_path / "result.csv"
     _minimal_df(cfg).to_csv(csv_path, index=False, encoding="utf-8-sig")
 
-    loaded = read_result_file(str(csv_path))
+    loaded = _read_result_file(str(csv_path))
     assert len(loaded) == 1
 
     with pytest.raises(FileNotFoundError):
-        read_result_file(str(tmp_path / "not_exists.xlsx"))
+        _read_result_file(str(tmp_path / "not_exists.xlsx"))
     assert len(loaded) == 1
 
     with pytest.raises(FileNotFoundError):
-        read_result_file(str(tmp_path / "not_exists.xlsx"))
+        _read_result_file(str(tmp_path / "not_exists.xlsx"))

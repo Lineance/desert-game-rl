@@ -6,7 +6,7 @@ import pulp
 import pytest
 
 from src.env.config import Weather
-from src.pipeline.oracle import solve_theoretical_optimal_with_config
+from src.utils.oracle import solve_theoretical_optimal_with_config
 
 REFERENCE_TIME_LIMIT = 300
 ORACLE_TIME_LIMIT = 300

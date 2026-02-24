@@ -1,5 +1,3 @@
-from pathlib import Path
-
 import torch
 
 from src.pipeline import pretrain as pretrain_mod

@@ -1,10 +1,10 @@
 import pandas as pd
 
-from src.pipeline.validator import RLResultValidator, build_validation_config
+from src.utils.validator import RLResultValidator, _build_validation_config
 
 
 def test_validator_accepts_consistent_small_path_level3():
-    cfg = build_validation_config(3)
+    cfg = _build_validation_config(3)
 
     # 路径: 1 -> 4 -> 6 -> 13(终点)
     # 晴朗移动消耗: 水6 食8

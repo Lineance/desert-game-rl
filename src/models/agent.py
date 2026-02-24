@@ -182,9 +182,7 @@ class CriticNetwork(nn.Module):
         return self.net(state)
 
 
-class HybridRNNAgent(nn.Module):
-    """简化版智能体 - MLP + Belief"""
-
+class Agent(nn.Module):
     def __init__(self, obs_dim: int, num_locations: int, config: Optional[RLConfig] = None):
         super().__init__()
         if config is None:
@@ -365,6 +363,6 @@ class HybridRNNAgent(nn.Module):
 def create_agent(env, config: Optional[RLConfig] = None, device: str = "cpu"):
     """创建智能体"""
     obs_dim = 19  # 与environment一致: 6状态+3天气+4地点+6信念
-    agent = HybridRNNAgent(obs_dim=obs_dim, num_locations=env.config.NUM_NODES, config=config)
+    agent = Agent(obs_dim=obs_dim, num_locations=env.config.NUM_NODES, config=config)
     agent.to(device)
     return agent

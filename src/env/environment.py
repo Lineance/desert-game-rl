@@ -68,14 +68,14 @@ class DesertCrossingEnv:
         # 生成天气序列（第1天到第NUM_DAYS天）
         weather_sequence = self._generate_weather_sequence()
 
-        # BUG修复: 第0天在起点，初始资源为0，资金完整
+        # 第0天在起点，初始资源为0，资金完整
         # 购买必须通过第0天的显式动作完成
         init_water, init_food = 0, 0
         init_money = self.config.INIT_MONEY
 
         # 第0天开始（第0天使用第1天天气用于规划）
         self.state = State(
-            day=0,  # BUG修复: 从第0天开始
+            day=0,  # 从第0天开始
             position=self.config.START,
             water=init_water,
             food=init_food,
@@ -202,7 +202,7 @@ class DesertCrossingEnv:
 
     def step(self, action: Dict[str, Any]) -> Tuple[np.ndarray, float, bool, bool, Dict]:
         """
-        执行动作 - 修复版
+        执行动作
 
         正确顺序：
         1. 移动（检查邻居、沙暴限制）
@@ -284,7 +284,7 @@ class DesertCrossingEnv:
         is_moving = move_target != s.position
 
         if is_moving:
-            # BUG修复：先检查沙暴，再移动
+            # 先检查沙暴，再移动
             if s.weather_today == Weather.SANDSTORM:
                 reward -= 50.0
                 is_moving = False  # 强制停留，不移动

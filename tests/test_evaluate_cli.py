@@ -1,6 +1,7 @@
 import sys
 
 import src.pipeline.evaluate as evaluate
+import src.pipeline.rollout as rollout
 
 
 class _FakeAgent:
@@ -30,10 +31,10 @@ def test_evaluate_main_runs_single_episode(monkeypatch, tmp_path):
         captured["filepath"] = filepath
         captured["level"] = level
 
-    monkeypatch.setattr(evaluate.HybridRNNAgent, "load", staticmethod(fake_load))
-    monkeypatch.setattr(evaluate, "run_episode", fake_run_episode)
-    monkeypatch.setattr(evaluate, "export_to_xlsx", fake_export)
-    monkeypatch.setattr(evaluate, "analyze_strategy", lambda result, env: None)
+    monkeypatch.setattr(rollout.Agent, "load", staticmethod(fake_load))
+    monkeypatch.setattr(rollout, "run_episode", fake_run_episode)
+    monkeypatch.setattr(rollout, "_export_to_xlsx", fake_export)
+    monkeypatch.setattr(rollout, "_analyze_strategy", lambda result, env: None)
 
     monkeypatch.setattr(
         sys,
@@ -50,7 +51,7 @@ def test_evaluate_main_runs_single_episode(monkeypatch, tmp_path):
         ],
     )
 
-    evaluate.main()
+    rollout.rollout_main()
 
     assert captured["level"] == 3
     assert str(tmp_path) in captured["filepath"]
@@ -83,7 +84,7 @@ def test_evaluate_main_runs_multi_episode(monkeypatch):
         ],
     )
 
-    evaluate.main()
+    evaluate.evaluate_main()
 
     assert called == {
         "agent_path": "dummy.pt",

@@ -3,11 +3,11 @@ import sys
 
 import pandas as pd
 
-from src.pipeline.evaluate import (
-    analyze_strategy,
-    export_to_csv,
-    export_to_xlsx,
-    format_action,
+from src.pipeline.rollout import (
+    _analyze_strategy,
+    _export_to_csv,
+    _export_to_xlsx,
+    _format_action,
     run_episode,
 )
 
@@ -20,7 +20,7 @@ def test_format_action_with_actual_move_and_purchase():
         "buy_water": 20,
         "buy_food": 10,
     }
-    text = format_action(action, position=4)
+    text = _format_action(action, position=4)
     assert "移动 1->4" in text
     assert "购买(水20食10)" in text
 
@@ -62,7 +62,7 @@ def test_export_to_csv_writes_expected_columns(tmp_path):
     }
 
     out = tmp_path / "result.csv"
-    export_to_csv(result, str(out), level=3)
+    _export_to_csv(result, str(out), level=3)
 
     assert out.exists()
     df = pd.read_csv(out)
@@ -85,7 +85,7 @@ def test_format_action_with_move_key_stay():
         "buy_water": 0,
         "buy_food": 0,
     }
-    text = format_action(action, position=3)
+    text = _format_action(action, position=3)
     assert text == "停留"
 
 
@@ -95,7 +95,7 @@ def test_format_action_defaults_to_stay_and_mine():
         "buy_water": 0,
         "buy_food": 0,
     }
-    text = format_action(action, position=1)
+    text = _format_action(action, position=1)
     assert text == "停留+挖矿"
 
 
@@ -130,7 +130,7 @@ def test_export_to_xlsx_falls_back_to_csv(tmp_path, monkeypatch):
     monkeypatch.setattr(builtins, "__import__", fake_import)
 
     out = tmp_path / "result.xlsx"
-    export_to_xlsx(result, str(out), level=3)
+    _export_to_xlsx(result, str(out), level=3)
 
     assert (tmp_path / "result.csv").exists()
 
@@ -185,7 +185,7 @@ def test_export_to_xlsx_writes_file_with_stub(tmp_path, monkeypatch):
     }
 
     out = tmp_path / "result.xlsx"
-    export_to_xlsx(result, str(out), level=3)
+    _export_to_xlsx(result, str(out), level=3)
 
     assert out.exists()
 
@@ -281,7 +281,7 @@ def test_run_episode_terminates_on_truncated_and_uses_no_grad():
 
 def test_format_action_and_analyze_strategy_handle_missing_buy_keys(capsys):
     action = {"move_from": 0, "move_to": 0, "mine": True}
-    text = format_action(action, position=1)
+    text = _format_action(action, position=1)
     assert text == "停留+挖矿"
 
     result = {
@@ -300,6 +300,6 @@ def test_format_action_and_analyze_strategy_handle_missing_buy_keys(capsys):
         "final_money": 100.0,
     }
 
-    analyze_strategy(result, env=None)
+    _analyze_strategy(result, env=None)
     out = capsys.readouterr().out
     assert "购买次数: 0" in out

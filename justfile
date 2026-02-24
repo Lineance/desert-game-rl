@@ -17,8 +17,8 @@ test:
     uv run pytest -x
 
 # 覆盖率报告
-cov:
-    uv run pytest --cov=src --cov-report=term
+cov arg:
+    uv run pytest --cov=src --cov-report=term -m "{{arg}}"
 
 # ========== 训练与评估 ==========
 

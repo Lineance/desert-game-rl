@@ -12,7 +12,7 @@ import torch.nn as nn
 import torch.optim as optim
 
 from src.env.config import RLConfig
-from src.models.agent import HybridRNNAgent
+from src.models.agent import Agent
 
 
 @dataclass
@@ -43,7 +43,7 @@ class RolloutBuffer:
         self.log_probs: List[float] = []
         self.dones: List[bool] = []
         self.hidden_states: List[Optional[Tuple]] = []
-        self.valid_actions_list: List[Optional[Dict]] = []  # BUG修复1: 存储valid_actions
+        self.valid_actions_list: List[Optional[Dict]] = []  # 存储valid_actions
 
     def add(
         self,
@@ -64,7 +64,7 @@ class RolloutBuffer:
         self.log_probs.append(log_prob)
         self.dones.append(done)
         self.hidden_states.append(hidden)
-        self.valid_actions_list.append(valid_actions)  # BUG修复1: 存储valid_actions
+        self.valid_actions_list.append(valid_actions)  # 存储valid_actions
 
     def clear(self):
         """清空缓冲区"""
@@ -135,7 +135,7 @@ class PPOTrainer:
 
     def __init__(
         self,
-        agent: HybridRNNAgent,
+        agent: Agent,
         config: Optional[RLConfig] = None,
         device: str = "cpu",
     ):
@@ -196,9 +196,7 @@ class PPOTrainer:
         returns_tensor = torch.FloatTensor(returns).to(self.device)
         advantages_tensor = torch.FloatTensor(advantages).to(self.device)
         old_log_probs_tensor = torch.FloatTensor(rollout_buffer.log_probs).to(self.device)
-        values_tensor = torch.FloatTensor(rollout_buffer.values).to(
-            self.device
-        )  # BUG修复6: 用于价值裁剪
+        values_tensor = torch.FloatTensor(rollout_buffer.values).to(self.device)  # 用于价值裁剪
 
         # 归一化优势
         advantages_tensor = (advantages_tensor - advantages_tensor.mean()) / (
@@ -230,8 +228,8 @@ class PPOTrainer:
 
         num_updates = self.config.EPOCHS_PER_UPDATE
 
-        for epoch in range(num_updates):
-            # BUG修复1 & 6: 使用存储的valid_actions，并添加价值裁剪
+        for _epoch in range(num_updates):
+            # 使用存储的valid_actions，并添加价值裁剪
 
             # 逐个处理（保证valid_actions正确性）
             batch_new_log_probs = []
@@ -273,7 +271,7 @@ class PPOTrainer:
             )
             policy_loss = -torch.min(surr1, surr2).mean()
 
-            # BUG修复6: 价值裁剪
+            # 价值裁剪
             value_pred_clipped = old_values + torch.clamp(
                 new_values - old_values, -self.config.CLIP_EPS, self.config.CLIP_EPS
             )
@@ -404,7 +402,7 @@ class PPOTrainer:
             if bought_w > 0 or bought_f > 0:
                 buy_count += 1
 
-            # BUG修复: 直接使用全局节点ID，不要转换为局部索引
+            # 直接使用全局节点ID，不要转换为局部索引
             # 因为evaluate_actions期望的是全局ID来索引全局概率分布
             action_idx = action  # 直接使用，不转换
             with torch.no_grad():

@@ -2,14 +2,11 @@ import math
 
 import numpy as np
 import pytest
+from hypothesis import given, settings
+from hypothesis import strategies as st
 
 from src.env.config import BASE_CONSUMPTION, Level3Config, Level4Config, Level35Config
 from src.env.environment import make_env
-
-hypothesis = pytest.importorskip("hypothesis")
-
-from hypothesis import given, settings
-from hypothesis import strategies as st
 
 
 def _sample_action(valid_actions, rng):

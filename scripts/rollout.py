@@ -7,9 +7,9 @@ if str(ROOT) not in sys.path:
 
 
 def _main() -> None:
-    from src.pipeline.train import train_main
+    from src.pipeline.rollout import rollout_main
 
-    train_main()
+    rollout_main()
 
 
 if __name__ == "__main__":

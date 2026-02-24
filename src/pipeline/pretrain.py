@@ -3,9 +3,10 @@ import csv
 import re
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, TextIO
+from typing import Any, Callable, Dict, List, Optional, TextIO
 
 import torch
+import torch.nn.functional as F
 
 from src.env.config import (
     CHECKPOINTS_DIR,
@@ -17,238 +18,9 @@ from src.env.config import (
     RLConfig,
 )
 from src.env.environment import make_env
-from src.models.agent import HybridRNNAgent, create_agent
+from src.models.agent import Agent, create_agent
 from src.models.ppo import PPOTrainer
-from src.pipeline.warmup import warmup_with_oracle
-
-
-def _resolve_weather_mode(level: int, requested_mode: Optional[str]) -> str:
-    if level == 3:
-        modes = Level3Config.WEATHER_MODES
-        preferred_default = "no_sandstorm"
-    elif level == 35:
-        modes = Level35Config.WEATHER_MODES
-        preferred_default = "train_medium"
-    elif level == 4:
-        modes = Level4Config.WEATHER_MODES
-        preferred_default = "balanced"
-    else:
-        raise ValueError(f"Unknown level: {level}")
-
-    if requested_mode is not None:
-        mode = requested_mode.strip()
-        if mode in modes:
-            return mode
-        fallback = preferred_default if preferred_default in modes else next(iter(modes.keys()))
-        print(f"未识别weather_mode='{requested_mode}'，已回退到'{fallback}'")
-        return fallback
-
-    if preferred_default in modes:
-        return preferred_default
-    return next(iter(modes.keys()))
-
-
-def _init_pretrain_loggers(
-    level: int,
-) -> tuple[TextIO, csv.DictWriter, Optional[Any], Path, Optional[Path]]:
-    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-    LOGS_DIR.mkdir(parents=True, exist_ok=True)
-
-    csv_path = RESULTS_DIR / f"level{level}_pretrain_metrics.csv"
-    csv_file = open(csv_path, "w", encoding="utf-8", newline="")
-    csv_writer = csv.DictWriter(
-        csv_file,
-        fieldnames=[
-            "episode",
-            "policy_loss",
-            "value_loss",
-            "episode_loss",
-            "steps",
-            "first_value",
-            "first_return",
-            "mine_days",
-            "buy_water",
-            "buy_food",
-            "success",
-            "match_rate",
-            "student_steps",
-            "student_mine_days",
-            "student_buy_water",
-            "student_buy_food",
-            "student_success",
-        ],
-    )
-    csv_writer.writeheader()
-
-    tb_writer = None
-    tb_dir = None
-    try:
-        from torch.utils.tensorboard import SummaryWriter
-
-        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        tb_dir = LOGS_DIR / "tensorboard" / f"pretrain_level{level}_{timestamp}"
-        tb_writer = SummaryWriter(log_dir=str(tb_dir))
-    except Exception as tensorboard_error:
-        print(f"TensorBoard不可用，已跳过TB日志：{tensorboard_error}")
-
-    return csv_file, csv_writer, tb_writer, csv_path, tb_dir
-
-
-def _resolve_resume_path(resume: Optional[str], level: int) -> Optional[Path]:
-    if resume is None:
-        return None
-    resume = resume.strip()
-    if not resume:
-        return None
-    if resume.lower() == "latest":
-        return CHECKPOINTS_DIR / f"level{level}_pretrain_latest.pt"
-    return Path(resume)
-
-
-def _load_pretrain_agent_from_checkpoint(path: Path, device: str) -> HybridRNNAgent:
-    try:
-        checkpoint = torch.load(path, map_location=device, weights_only=False)
-    except TypeError:
-        checkpoint = torch.load(path, map_location=device)
-
-    if not isinstance(checkpoint, dict):
-        raise ValueError("Invalid checkpoint format")
-
-    if all(k in checkpoint for k in ("state_dict", "obs_dim", "num_locations", "config")):
-        agent = HybridRNNAgent(
-            obs_dim=int(checkpoint["obs_dim"]),
-            num_locations=int(checkpoint["num_locations"]),
-            config=checkpoint["config"],
-        )
-        agent.load_state_dict(checkpoint["state_dict"])
-        agent.to(device)
-        return agent
-
-    if all(k in checkpoint for k in ("agent_state_dict", "obs_dim", "num_locations", "config")):
-        agent = HybridRNNAgent(
-            obs_dim=int(checkpoint["obs_dim"]),
-            num_locations=int(checkpoint["num_locations"]),
-            config=checkpoint["config"],
-        )
-        agent.load_state_dict(checkpoint["agent_state_dict"])
-        agent.to(device)
-        return agent
-
-    raise ValueError("Unsupported checkpoint format for pretrain resume")
-
-
-def _infer_resume_episode(path: Path, checkpoint: Optional[Dict[str, Any]] = None) -> int:
-    if isinstance(checkpoint, dict):
-        episode = checkpoint.get("episode")
-        if isinstance(episode, int) and episode >= 0:
-            return episode + 1
-
-    match = re.search(r"_episode(\d+)\.pt$", path.name)
-    if match:
-        return int(match.group(1))
-    return 0
-
-
-def _save_pretrain_latest_checkpoint(path: Path, agent: HybridRNNAgent, episode: int) -> None:
-    torch.save(
-        {
-            "state_dict": agent.state_dict(),
-            "config": agent.config,
-            "obs_dim": agent.obs_dim,
-            "num_locations": agent.num_locations,
-            "episode": int(episode),
-        },
-        path,
-    )
-
-
-def _write_pretrain_metrics(
-    csv_writer: csv.DictWriter,
-    tb_writer: Optional[Any],
-    warmup_metrics: List[Dict[str, float]],
-    summary: Dict[str, float],
-) -> None:
-    for item in warmup_metrics:
-        row = {
-            "episode": int(item.get("episode", 0)),
-            "policy_loss": float(item.get("policy_loss", float("nan"))),
-            "value_loss": float(item.get("value_loss", float("nan"))),
-            "episode_loss": float(item.get("episode_loss", float("nan"))),
-            "steps": float(item.get("steps", 0.0)),
-            "first_value": float(item.get("first_value", float("nan"))),
-            "first_return": float(item.get("first_return", float("nan"))),
-            "mine_days": float(item.get("mine_days", 0.0)),
-            "buy_water": float(item.get("buy_water", 0.0)),
-            "buy_food": float(item.get("buy_food", 0.0)),
-            "success": float(item.get("success", 0.0)),
-            "match_rate": float(item.get("match_rate", 0.0)),
-            "student_steps": float(item.get("student_steps", 0.0)),
-            "student_mine_days": float(item.get("student_mine_days", 0.0)),
-            "student_buy_water": float(item.get("student_buy_water", 0.0)),
-            "student_buy_food": float(item.get("student_buy_food", 0.0)),
-            "student_success": float(item.get("student_success", 0.0)),
-        }
-        csv_writer.writerow(row)
-
-        if tb_writer is not None:
-            episode = row["episode"]
-            tb_writer.add_scalar("pretrain/policy_loss", row["policy_loss"], episode)
-            tb_writer.add_scalar("pretrain/value_loss", row["value_loss"], episode)
-            tb_writer.add_scalar("pretrain/episode_loss", row["episode_loss"], episode)
-            tb_writer.add_scalar("pretrain/steps", row["steps"], episode)
-            tb_writer.add_scalar("pretrain/mine_days", row["mine_days"], episode)
-            tb_writer.add_scalar("pretrain/buy_water", row["buy_water"], episode)
-            tb_writer.add_scalar("pretrain/buy_food", row["buy_food"], episode)
-            tb_writer.add_scalar("pretrain/success", row["success"], episode)
-            tb_writer.add_scalar("pretrain/match_rate", row["match_rate"], episode)
-            tb_writer.add_scalar("pretrain/student_steps", row["student_steps"], episode)
-            tb_writer.add_scalar("pretrain/student_mine_days", row["student_mine_days"], episode)
-            tb_writer.add_scalar("pretrain/student_buy_water", row["student_buy_water"], episode)
-            tb_writer.add_scalar("pretrain/student_buy_food", row["student_buy_food"], episode)
-            tb_writer.add_scalar("pretrain/student_success", row["student_success"], episode)
-
-    if tb_writer is not None:
-        tb_writer.add_scalar("pretrain_summary/success_rate", float(summary["success_rate"]), 0)
-        tb_writer.add_scalar("pretrain_summary/avg_steps", float(summary["avg_steps"]), 0)
-        tb_writer.add_scalar(
-            "pretrain_summary/avg_mine_per_episode",
-            float(summary["avg_mine_per_episode"]),
-            0,
-        )
-        tb_writer.add_scalar("pretrain_summary/avg_buy_water", float(summary["avg_buy_water"]), 0)
-        tb_writer.add_scalar("pretrain_summary/avg_buy_food", float(summary["avg_buy_food"]), 0)
-        tb_writer.add_scalar("pretrain_summary/avg_value_loss", float(summary["avg_value_loss"]), 0)
-        tb_writer.add_scalar(
-            "pretrain_summary/final_value_loss",
-            float(summary["final_value_loss"]),
-            0,
-        )
-        tb_writer.add_scalar("pretrain_summary/match_rate", float(summary["match_rate"]), 0)
-        tb_writer.add_scalar(
-            "pretrain_summary/student_success_rate",
-            float(summary.get("student_success_rate", 0.0)),
-            0,
-        )
-        tb_writer.add_scalar(
-            "pretrain_summary/student_avg_steps",
-            float(summary.get("student_avg_steps", 0.0)),
-            0,
-        )
-        tb_writer.add_scalar(
-            "pretrain_summary/student_avg_mine_per_episode",
-            float(summary.get("student_avg_mine_per_episode", 0.0)),
-            0,
-        )
-        tb_writer.add_scalar(
-            "pretrain_summary/student_avg_buy_water",
-            float(summary.get("student_avg_buy_water", 0.0)),
-            0,
-        )
-        tb_writer.add_scalar(
-            "pretrain_summary/student_avg_buy_food",
-            float(summary.get("student_avg_buy_food", 0.0)),
-            0,
-        )
+from src.utils.oracle import solve_theoretical_plan
 
 
 def evaluate_pretrain_metrics(summary: Dict[str, float]) -> Dict[str, object]:
@@ -330,6 +102,336 @@ def evaluate_pretrain_metrics(summary: Dict[str, float]) -> Dict[str, object]:
     }
 
 
+def warmup_with_oracle(
+    agent: Agent,
+    trainer: PPOTrainer,
+    env,
+    level: int,
+    episodes: int,
+    time_limit: int,
+    device: str,
+    value_weight: float = 0.1,
+    log_interval: int = 10,
+    start_episode: int = 0,
+    metrics: Optional[List[Dict[str, float]]] = None,
+    on_episode_end: Optional[Callable[[int, Dict[str, float]], None]] = None,
+) -> Dict[str, float]:
+    if episodes <= 0:
+        return {
+            "episodes": 0.0,
+            "solved": 0.0,
+            "success_rate": 0.0,
+            "avg_steps": 0.0,
+            "avg_mine_per_episode": 0.0,
+            "avg_buy_water": 0.0,
+            "avg_buy_food": 0.0,
+            "avg_value_loss": 0.0,
+            "final_value_loss": 0.0,
+            "value_loss_trend": 0.0,
+            "match_rate": 0.0,
+        }
+    if level not in (3, 35, 4):
+        print("Oracle预热仅支持level 3/35/4，已跳过。")
+        return {
+            "episodes": float(episodes),
+            "solved": 0.0,
+            "success_rate": 0.0,
+            "avg_steps": 0.0,
+            "avg_mine_per_episode": 0.0,
+            "avg_buy_water": 0.0,
+            "avg_buy_food": 0.0,
+            "avg_value_loss": 0.0,
+            "final_value_loss": 0.0,
+            "value_loss_trend": 0.0,
+            "match_rate": 0.0,
+        }
+
+    agent.train()
+    total_loss = 0.0
+    total_steps = 0
+    solved = 0
+    success = 0
+    total_mine_days = 0
+    total_buy_water = 0
+    total_buy_food = 0
+    matched_actions = 0
+    total_actions = 0
+    value_losses: List[float] = []
+    student_total_steps = 0
+    student_total_mine_days = 0
+    student_total_buy_water = 0
+    student_total_buy_food = 0
+    student_success = 0
+    student_eval_episodes = 0
+
+    weather_mode = str(getattr(env, "weather_mode", "balanced"))
+
+    for ep in range(start_episode, start_episode + episodes):
+        should_eval_student = (log_interval > 0) and (ep % log_interval == 0)
+        episode_record: Dict[str, float] = {
+            "episode": float(ep),
+            "solved": 0.0,
+            "success": 0.0,
+            "steps": 0.0,
+            "mine_days": 0.0,
+            "buy_water": 0.0,
+            "buy_food": 0.0,
+            "match_rate": 0.0,
+            "student_steps": float("nan"),
+            "student_mine_days": float("nan"),
+            "student_buy_water": float("nan"),
+            "student_buy_food": float("nan"),
+            "student_success": float("nan"),
+        }
+        obs, _ = env.reset(seed=ep)
+        if env.state is None:
+            if on_episode_end is not None:
+                on_episode_end(ep, dict(episode_record))
+            continue
+
+        if should_eval_student:
+            try:
+                student_eval = _rollout_student_policy(agent, level, weather_mode, ep)
+                student_total_steps += int(student_eval["steps"])
+                student_total_mine_days += int(student_eval["mine_days"])
+                student_total_buy_water += int(student_eval["buy_water"])
+                student_total_buy_food += int(student_eval["buy_food"])
+                student_success += int(student_eval["success"])
+                student_eval_episodes += 1
+                episode_record["student_steps"] = float(student_eval["steps"])
+                episode_record["student_mine_days"] = float(student_eval["mine_days"])
+                episode_record["student_buy_water"] = float(student_eval["buy_water"])
+                episode_record["student_buy_food"] = float(student_eval["buy_food"])
+                episode_record["student_success"] = float(student_eval["success"])
+            except Exception:
+                episode_record["student_steps"] = float("nan")
+                episode_record["student_mine_days"] = float("nan")
+                episode_record["student_buy_water"] = float("nan")
+                episode_record["student_buy_food"] = float("nan")
+                episode_record["student_success"] = float("nan")
+
+        weather_seq = list(env.state.weather_future)
+        oracle = solve_theoretical_plan(level, weather_seq, time_limit=time_limit)
+        plan = oracle.get("plan", [])
+        if not plan:
+            if ep % log_interval == 0:
+                print(f"Oracle预热: episode={ep}, plan为空，跳过")
+            if on_episode_end is not None:
+                on_episode_end(ep, dict(episode_record))
+            continue
+
+        solved += 1
+        episode_record["solved"] = 1.0
+        episode_steps = 0
+        episode_mine_days = 0
+        episode_buy_water = 0
+        episode_buy_food = 0
+        episode_matched = 0
+        episode_total_actions = 0
+        episode_success = 0
+        log_probs: List[torch.Tensor] = []
+        values: List[torch.Tensor] = []
+        rewards: List[float] = []
+
+        for oracle_action in plan:
+            valid_actions = env.get_valid_actions()
+            action = _sanitize_oracle_action(oracle_action, env, valid_actions)
+
+            pred_action, _ = agent.select_action(obs, valid_actions, deterministic=True)
+            move_match = int(pred_action.get("move", env.state.position)) == int(action["move"])
+            if action["buy_water"] == 0:
+                water_match = int(pred_action.get("buy_water", 0)) == 0
+            else:
+                water_match = (
+                    abs(int(pred_action.get("buy_water", 0)) - int(action["buy_water"]))
+                    / max(1.0, float(action["buy_water"]))
+                    <= 0.1
+                )
+            if action["buy_food"] == 0:
+                food_match = int(pred_action.get("buy_food", 0)) == 0
+            else:
+                food_match = (
+                    abs(int(pred_action.get("buy_food", 0)) - int(action["buy_food"]))
+                    / max(1.0, float(action["buy_food"]))
+                    <= 0.1
+                )
+            if move_match and water_match and food_match:
+                matched_actions += 1
+                episode_matched += 1
+            total_actions += 1
+            episode_total_actions += 1
+
+            obs_tensor = torch.FloatTensor(obs).unsqueeze(0).to(device)
+            state = agent.encode_observation(obs_tensor)
+            action_tensor = {
+                "move": torch.LongTensor([action["move"]]).to(device),
+                "mine": torch.FloatTensor([action["mine"]]).to(device),
+                "buy_water": torch.FloatTensor([action["buy_water"]]).to(device),
+                "buy_food": torch.FloatTensor([action["buy_food"]]).to(device),
+            }
+            log_prob, _ = agent.actor.evaluate_actions(state, action_tensor, valid_actions)
+            value = agent.critic(state).squeeze(-1)
+            log_probs.append(log_prob.squeeze(0))
+            values.append(value.squeeze(0))
+
+            next_obs, reward, done, truncated, _ = env.step(action)
+            last_action = env.state.last_action if env.state is not None else None
+            if isinstance(last_action, dict):
+                if bool(last_action.get("mine", False)):
+                    total_mine_days += 1
+                    episode_mine_days += 1
+                total_buy_water += int(last_action.get("buy_water", 0))
+                total_buy_food += int(last_action.get("buy_food", 0))
+                episode_buy_water += int(last_action.get("buy_water", 0))
+                episode_buy_food += int(last_action.get("buy_food", 0))
+            rewards.append(float(reward))
+            obs = next_obs
+            episode_steps += 1
+            if done or truncated:
+                break
+
+        if episode_steps == 0 or not log_probs or not values:
+            if on_episode_end is not None:
+                episode_record["steps"] = float(episode_steps)
+                on_episode_end(ep, dict(episode_record))
+            continue
+
+        returns: List[float] = []
+        running_return = 0.0
+        for r in reversed(rewards):
+            running_return = r + trainer.config.GAMMA * running_return
+            returns.insert(0, running_return)
+
+        policy_loss = -torch.stack(log_probs).mean()
+        returns_tensor = torch.tensor(returns, dtype=torch.float32, device=device)
+        values_tensor = torch.stack(values)
+        value_loss = F.mse_loss(values_tensor, returns_tensor)
+        episode_loss = policy_loss + value_weight * value_loss
+        value_losses.append(float(value_loss.item()))
+
+        trainer.optimizer.zero_grad()
+        episode_loss.backward()
+        torch.nn.utils.clip_grad_norm_(agent.parameters(), trainer.config.MAX_GRAD_NORM)
+        trainer.optimizer.step()
+
+        total_loss += float(episode_loss.item())
+        total_steps += episode_steps
+
+        if metrics is not None:
+            if env.state is not None and bool(env.state.reached):
+                episode_success = 1
+            episode_record["steps"] = float(episode_steps)
+            episode_record["mine_days"] = float(episode_mine_days)
+            episode_record["buy_water"] = float(episode_buy_water)
+            episode_record["buy_food"] = float(episode_buy_food)
+            episode_record["success"] = float(episode_success)
+            episode_record["match_rate"] = float(episode_matched / max(1, episode_total_actions))
+            episode_record["value_loss"] = float(value_loss.item())
+            metrics.append(
+                {
+                    "episode": float(ep),
+                    "policy_loss": float(policy_loss.item()),
+                    "value_loss": float(value_loss.item()),
+                    "episode_loss": float(episode_loss.item()),
+                    "steps": float(episode_steps),
+                    "first_value": float(values_tensor[0].item())
+                    if len(values_tensor) > 0
+                    else float("nan"),
+                    "first_return": float(returns_tensor[0].item())
+                    if len(returns_tensor) > 0
+                    else float("nan"),
+                    "mine_days": float(episode_mine_days),
+                    "buy_water": float(episode_buy_water),
+                    "buy_food": float(episode_buy_food),
+                    "success": float(episode_success),
+                    "match_rate": float(episode_matched / max(1, episode_total_actions)),
+                    "student_steps": float(episode_record.get("student_steps", 0.0)),
+                    "student_mine_days": float(episode_record.get("student_mine_days", 0.0)),
+                    "student_buy_water": float(episode_record.get("student_buy_water", 0.0)),
+                    "student_buy_food": float(episode_record.get("student_buy_food", 0.0)),
+                    "student_success": float(episode_record.get("student_success", 0.0)),
+                }
+            )
+        else:
+            if env.state is not None and bool(env.state.reached):
+                episode_success = 1
+            episode_record["steps"] = float(episode_steps)
+            episode_record["mine_days"] = float(episode_mine_days)
+            episode_record["buy_water"] = float(episode_buy_water)
+            episode_record["buy_food"] = float(episode_buy_food)
+            episode_record["success"] = float(episode_success)
+            episode_record["match_rate"] = float(episode_matched / max(1, episode_total_actions))
+            episode_record["value_loss"] = float(value_loss.item())
+
+        if log_interval > 0 and ep % log_interval == 0:
+            avg_loss = total_loss / max(1, solved)
+            avg_steps = total_steps / max(1, solved)
+            avg_mine = total_mine_days / max(1, solved)
+            match_rate = matched_actions / max(1, total_actions)
+            student_avg_steps = student_total_steps / max(1, student_eval_episodes)
+            student_avg_mine = student_total_mine_days / max(1, student_eval_episodes)
+            student_success_rate = student_success / max(1, student_eval_episodes)
+            print(
+                f"Oracle预热进度: episode={ep}, solved={solved}, "
+                f"avg_steps={avg_steps:.1f}, avg_mine={avg_mine:.2f}, "
+                f"match_rate={match_rate:.2%}, avg_loss={avg_loss:.4f}; "
+                f"student(avg_steps={student_avg_steps:.1f}, avg_mine={student_avg_mine:.2f}, "
+                f"success={student_success_rate:.2%}, eval_points={student_eval_episodes})"
+            )
+
+        if env.state is not None and bool(env.state.reached):
+            success += 1
+
+        if on_episode_end is not None:
+            on_episode_end(ep, dict(episode_record))
+
+    avg_loss = total_loss / max(1, solved)
+    avg_steps = total_steps / max(1, solved)
+    avg_mine = total_mine_days / max(1, solved)
+    avg_buy_water = total_buy_water / max(1, solved)
+    avg_buy_food = total_buy_food / max(1, solved)
+    success_rate = success / max(1, episodes)
+    success_rate_given_solved = success / max(1, solved)
+    match_rate = matched_actions / max(1, total_actions)
+    avg_value_loss = sum(value_losses) / max(1, len(value_losses))
+    final_value_loss = value_losses[-1] if value_losses else 0.0
+    value_loss_trend = value_losses[-1] - value_losses[0] if len(value_losses) >= 2 else 0.0
+    student_avg_steps = student_total_steps / max(1, student_eval_episodes)
+    student_avg_mine = student_total_mine_days / max(1, student_eval_episodes)
+    student_avg_buy_water = student_total_buy_water / max(1, student_eval_episodes)
+    student_avg_buy_food = student_total_buy_food / max(1, student_eval_episodes)
+    student_success_rate = student_success / max(1, student_eval_episodes)
+    print(
+        f"Oracle预热完成: episodes={episodes}, solved={solved}, "
+        f"success_rate={success_rate:.2%}, avg_steps={avg_steps:.1f}, "
+        f"avg_mine={avg_mine:.2f}, avg_buy_w={avg_buy_water:.1f}, "
+        f"avg_buy_f={avg_buy_food:.1f}, match_rate={match_rate:.2%}, avg_loss={avg_loss:.4f}; "
+        f"student(success_rate={student_success_rate:.2%}, avg_steps={student_avg_steps:.1f}, "
+        f"avg_mine={student_avg_mine:.2f}, avg_buy_w={student_avg_buy_water:.1f}, "
+        f"avg_buy_f={student_avg_buy_food:.1f})"
+    )
+
+    return {
+        "episodes": float(episodes),
+        "solved": float(solved),
+        "success_rate": float(success_rate),
+        "avg_steps": float(avg_steps),
+        "avg_mine_per_episode": float(avg_mine),
+        "avg_buy_water": float(avg_buy_water),
+        "avg_buy_food": float(avg_buy_food),
+        "avg_value_loss": float(avg_value_loss),
+        "final_value_loss": float(final_value_loss),
+        "value_loss_trend": float(value_loss_trend),
+        "match_rate": float(match_rate),
+        "success_rate_given_solved": float(success_rate_given_solved),
+        "student_success_rate": float(student_success_rate),
+        "student_avg_steps": float(student_avg_steps),
+        "student_avg_mine_per_episode": float(student_avg_mine),
+        "student_avg_buy_water": float(student_avg_buy_water),
+        "student_avg_buy_food": float(student_avg_buy_food),
+    }
+
+
 def pretrain_only(
     level: int = 3,
     warmup_episodes: int = 200,
@@ -360,7 +462,7 @@ def pretrain_only(
         try:
             resume_agent = _load_pretrain_agent_from_checkpoint(resume_path, device)
         except Exception:
-            resume_agent = HybridRNNAgent.load(str(resume_path), device=device)
+            resume_agent = Agent.load(str(resume_path), device=device)
         agent = resume_agent
 
         try:
@@ -514,3 +616,295 @@ def pretrain_main() -> None:
         save_interval=args.save_interval,
         resume=args.resume,
     )
+
+
+def _sanitize_oracle_action(action: Dict[str, Any], env, valid_actions: Dict[str, Any]) -> Dict:
+    move = int(action.get("move", env.state.position))
+    valid_moves = valid_actions.get("valid_moves", []) if valid_actions else []
+    if valid_moves and move not in valid_moves:
+        move = int(env.state.position)
+
+    can_mine = bool(valid_actions.get("can_mine", False)) if valid_actions else False
+    mine = bool(action.get("mine", False)) and can_mine
+
+    if valid_actions and bool(valid_actions.get("can_buy", False)):
+        max_w = int(valid_actions.get("max_buy_water", 0))
+        max_f = int(valid_actions.get("max_buy_food", 0))
+        buy_water = max(0, min(int(action.get("buy_water", 0)), max_w))
+        buy_food = max(0, min(int(action.get("buy_food", 0)), max_f))
+    else:
+        buy_water = 0
+        buy_food = 0
+
+    return {
+        "move": move,
+        "mine": mine,
+        "buy_water": buy_water,
+        "buy_food": buy_food,
+    }
+
+
+def _rollout_student_policy(
+    agent: Agent,
+    level: int,
+    weather_mode: str,
+    seed: int,
+) -> Dict[str, float]:
+    eval_env = make_env(level=level, weather_mode=weather_mode, seed=None)
+    obs, info = eval_env.reset(seed=seed)
+
+    steps = 0
+    mine_days = 0
+    buy_water = 0
+    buy_food = 0
+    done = False
+    truncated = False
+
+    while not done and not truncated and steps < 200:
+        valid_actions = eval_env.get_valid_actions()
+        action, _ = agent.select_action(obs, valid_actions, deterministic=True)
+        obs, _, done, truncated, info = eval_env.step(action)
+        last_action = info.get("last_action")
+        if isinstance(last_action, dict):
+            if bool(last_action.get("mine", False)):
+                mine_days += 1
+            buy_water += int(last_action.get("buy_water", 0))
+            buy_food += int(last_action.get("buy_food", 0))
+        steps += 1
+
+    return {
+        "steps": float(steps),
+        "mine_days": float(mine_days),
+        "buy_water": float(buy_water),
+        "buy_food": float(buy_food),
+        "success": float(bool(info.get("reached", False))),
+    }
+
+
+def _resolve_weather_mode(level: int, requested_mode: Optional[str]) -> str:
+    if level == 3:
+        modes = Level3Config.WEATHER_MODES
+        preferred_default = "no_sandstorm"
+    elif level == 35:
+        modes = Level35Config.WEATHER_MODES
+        preferred_default = "train_medium"
+    elif level == 4:
+        modes = Level4Config.WEATHER_MODES
+        preferred_default = "balanced"
+    else:
+        raise ValueError(f"Unknown level: {level}")
+
+    if requested_mode is not None:
+        mode = requested_mode.strip()
+        if mode in modes:
+            return mode
+        fallback = preferred_default if preferred_default in modes else next(iter(modes.keys()))
+        print(f"未识别weather_mode='{requested_mode}'，已回退到'{fallback}'")
+        return fallback
+
+    if preferred_default in modes:
+        return preferred_default
+    return next(iter(modes.keys()))
+
+
+def _init_pretrain_loggers(
+    level: int,
+) -> tuple[TextIO, csv.DictWriter, Optional[Any], Path, Optional[Path]]:
+    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+    LOGS_DIR.mkdir(parents=True, exist_ok=True)
+
+    csv_path = RESULTS_DIR / f"level{level}_pretrain_metrics.csv"
+    csv_file = open(csv_path, "w", encoding="utf-8", newline="")
+    csv_writer = csv.DictWriter(
+        csv_file,
+        fieldnames=[
+            "episode",
+            "policy_loss",
+            "value_loss",
+            "episode_loss",
+            "steps",
+            "first_value",
+            "first_return",
+            "mine_days",
+            "buy_water",
+            "buy_food",
+            "success",
+            "match_rate",
+            "student_steps",
+            "student_mine_days",
+            "student_buy_water",
+            "student_buy_food",
+            "student_success",
+        ],
+    )
+    csv_writer.writeheader()
+
+    tb_writer = None
+    tb_dir = None
+    try:
+        from torch.utils.tensorboard import SummaryWriter
+
+        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        tb_dir = LOGS_DIR / "tensorboard" / f"pretrain_level{level}_{timestamp}"
+        tb_writer = SummaryWriter(log_dir=str(tb_dir))
+    except Exception as tensorboard_error:
+        print(f"TensorBoard不可用，已跳过TB日志：{tensorboard_error}")
+
+    return csv_file, csv_writer, tb_writer, csv_path, tb_dir
+
+
+def _resolve_resume_path(resume: Optional[str], level: int) -> Optional[Path]:
+    if resume is None:
+        return None
+    resume = resume.strip()
+    if not resume:
+        return None
+    if resume.lower() == "latest":
+        return CHECKPOINTS_DIR / f"level{level}_pretrain_latest.pt"
+    return Path(resume)
+
+
+def _load_pretrain_agent_from_checkpoint(path: Path, device: str) -> Agent:
+    try:
+        checkpoint = torch.load(path, map_location=device, weights_only=False)
+    except TypeError:
+        checkpoint = torch.load(path, map_location=device)
+
+    if not isinstance(checkpoint, dict):
+        raise ValueError("Invalid checkpoint format")
+
+    if all(k in checkpoint for k in ("state_dict", "obs_dim", "num_locations", "config")):
+        agent = Agent(
+            obs_dim=int(checkpoint["obs_dim"]),
+            num_locations=int(checkpoint["num_locations"]),
+            config=checkpoint["config"],
+        )
+        agent.load_state_dict(checkpoint["state_dict"])
+        agent.to(device)
+        return agent
+
+    if all(k in checkpoint for k in ("agent_state_dict", "obs_dim", "num_locations", "config")):
+        agent = Agent(
+            obs_dim=int(checkpoint["obs_dim"]),
+            num_locations=int(checkpoint["num_locations"]),
+            config=checkpoint["config"],
+        )
+        agent.load_state_dict(checkpoint["agent_state_dict"])
+        agent.to(device)
+        return agent
+
+    raise ValueError("Unsupported checkpoint format for pretrain resume")
+
+
+def _infer_resume_episode(path: Path, checkpoint: Optional[Dict[str, Any]] = None) -> int:
+    if isinstance(checkpoint, dict):
+        episode = checkpoint.get("episode")
+        if isinstance(episode, int) and episode >= 0:
+            return episode + 1
+
+    match = re.search(r"_episode(\d+)\.pt$", path.name)
+    if match:
+        return int(match.group(1))
+    return 0
+
+
+def _save_pretrain_latest_checkpoint(path: Path, agent: Agent, episode: int) -> None:
+    torch.save(
+        {
+            "state_dict": agent.state_dict(),
+            "config": agent.config,
+            "obs_dim": agent.obs_dim,
+            "num_locations": agent.num_locations,
+            "episode": int(episode),
+        },
+        path,
+    )
+
+
+def _write_pretrain_metrics(
+    csv_writer: csv.DictWriter,
+    tb_writer: Optional[Any],
+    warmup_metrics: List[Dict[str, float]],
+    summary: Dict[str, float],
+) -> None:
+    for item in warmup_metrics:
+        row = {
+            "episode": int(item.get("episode", 0)),
+            "policy_loss": float(item.get("policy_loss", float("nan"))),
+            "value_loss": float(item.get("value_loss", float("nan"))),
+            "episode_loss": float(item.get("episode_loss", float("nan"))),
+            "steps": float(item.get("steps", 0.0)),
+            "first_value": float(item.get("first_value", float("nan"))),
+            "first_return": float(item.get("first_return", float("nan"))),
+            "mine_days": float(item.get("mine_days", 0.0)),
+            "buy_water": float(item.get("buy_water", 0.0)),
+            "buy_food": float(item.get("buy_food", 0.0)),
+            "success": float(item.get("success", 0.0)),
+            "match_rate": float(item.get("match_rate", 0.0)),
+            "student_steps": float(item.get("student_steps", 0.0)),
+            "student_mine_days": float(item.get("student_mine_days", 0.0)),
+            "student_buy_water": float(item.get("student_buy_water", 0.0)),
+            "student_buy_food": float(item.get("student_buy_food", 0.0)),
+            "student_success": float(item.get("student_success", 0.0)),
+        }
+        csv_writer.writerow(row)
+
+        if tb_writer is not None:
+            episode = row["episode"]
+            tb_writer.add_scalar("pretrain/policy_loss", row["policy_loss"], episode)
+            tb_writer.add_scalar("pretrain/value_loss", row["value_loss"], episode)
+            tb_writer.add_scalar("pretrain/episode_loss", row["episode_loss"], episode)
+            tb_writer.add_scalar("pretrain/steps", row["steps"], episode)
+            tb_writer.add_scalar("pretrain/mine_days", row["mine_days"], episode)
+            tb_writer.add_scalar("pretrain/buy_water", row["buy_water"], episode)
+            tb_writer.add_scalar("pretrain/buy_food", row["buy_food"], episode)
+            tb_writer.add_scalar("pretrain/success", row["success"], episode)
+            tb_writer.add_scalar("pretrain/match_rate", row["match_rate"], episode)
+            tb_writer.add_scalar("pretrain/student_steps", row["student_steps"], episode)
+            tb_writer.add_scalar("pretrain/student_mine_days", row["student_mine_days"], episode)
+            tb_writer.add_scalar("pretrain/student_buy_water", row["student_buy_water"], episode)
+            tb_writer.add_scalar("pretrain/student_buy_food", row["student_buy_food"], episode)
+            tb_writer.add_scalar("pretrain/student_success", row["student_success"], episode)
+
+    if tb_writer is not None:
+        tb_writer.add_scalar("pretrain_summary/success_rate", float(summary["success_rate"]), 0)
+        tb_writer.add_scalar("pretrain_summary/avg_steps", float(summary["avg_steps"]), 0)
+        tb_writer.add_scalar(
+            "pretrain_summary/avg_mine_per_episode",
+            float(summary["avg_mine_per_episode"]),
+            0,
+        )
+        tb_writer.add_scalar("pretrain_summary/avg_buy_water", float(summary["avg_buy_water"]), 0)
+        tb_writer.add_scalar("pretrain_summary/avg_buy_food", float(summary["avg_buy_food"]), 0)
+        tb_writer.add_scalar("pretrain_summary/avg_value_loss", float(summary["avg_value_loss"]), 0)
+        tb_writer.add_scalar(
+            "pretrain_summary/final_value_loss",
+            float(summary["final_value_loss"]),
+            0,
+        )
+        tb_writer.add_scalar("pretrain_summary/match_rate", float(summary["match_rate"]), 0)
+        tb_writer.add_scalar(
+            "pretrain_summary/student_success_rate",
+            float(summary.get("student_success_rate", 0.0)),
+            0,
+        )
+        tb_writer.add_scalar(
+            "pretrain_summary/student_avg_steps",
+            float(summary.get("student_avg_steps", 0.0)),
+            0,
+        )
+        tb_writer.add_scalar(
+            "pretrain_summary/student_avg_mine_per_episode",
+            float(summary.get("student_avg_mine_per_episode", 0.0)),
+            0,
+        )
+        tb_writer.add_scalar(
+            "pretrain_summary/student_avg_buy_water",
+            float(summary.get("student_avg_buy_water", 0.0)),
+            0,
+        )
+        tb_writer.add_scalar(
+            "pretrain_summary/student_avg_buy_food",
+            float(summary.get("student_avg_buy_food", 0.0)),
+            0,
+        )

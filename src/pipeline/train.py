@@ -19,9 +19,9 @@ from src.env.config import (
     RLConfig,
 )
 from src.env.environment import make_env
-from src.models.agent import HybridRNNAgent, create_agent
+from src.models.agent import Agent, create_agent
 from src.models.ppo import PPOTrainer
-from src.pipeline.warmup import warmup_with_oracle
+from src.pipeline.pretrain import warmup_with_oracle
 
 
 def _resolve_weather_mode(level: int, requested_mode: Optional[str]) -> str:
@@ -75,11 +75,11 @@ def _build_agent_from_checkpoint(
     checkpoint: Dict[str, Any],
     fallback_config: RLConfig,
     device: str,
-) -> Tuple[HybridRNNAgent, RLConfig]:
+) -> Tuple[Agent, RLConfig]:
     config = checkpoint.get("config", fallback_config)
     obs_dim = int(checkpoint["obs_dim"])
     num_locations = int(checkpoint["num_locations"])
-    agent = HybridRNNAgent(obs_dim=obs_dim, num_locations=num_locations, config=config)
+    agent = Agent(obs_dim=obs_dim, num_locations=num_locations, config=config)
     agent.load_state_dict(checkpoint["state_dict"])
     agent.to(device)
     return agent, config
@@ -87,7 +87,7 @@ def _build_agent_from_checkpoint(
 
 def _save_training_state(
     path: Path,
-    agent: HybridRNNAgent,
+    agent: Agent,
     trainer: PPOTrainer,
     episode: int,
     best_return: float,
@@ -159,7 +159,7 @@ def _compute_epsilon(
 def _safe_save_latest(
     save_dir: Path,
     level: int,
-    agent: HybridRNNAgent,
+    agent: Agent,
     trainer: PPOTrainer,
     episode: int,
     best_return: float,
@@ -601,7 +601,7 @@ def train(
     csv_file.close()
 
 
-def main() -> None:
+def train_main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--level", type=int, default=3)
     parser.add_argument("--episodes", type=int, default=2000)

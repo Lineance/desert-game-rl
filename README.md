@@ -24,15 +24,15 @@ task2/
 │   │   └── environment.py # POMDP环境与规则执行
 │   ├── models/
 │   │   ├── belief.py      # 天气信念模型与特征提取
-│   │   ├── agent.py       # MLP + Belief 编码策略/价值网络
+│   │   ├── agent.py       # 编码策略/价值网络
 │   │   └── ppo.py         # 唯一PPO训练实现（采样+更新）
-│   └── pipeline/
-│       ├── train.py       # 训练核心逻辑
-│       ├── evaluate.py    # 评估与导出核心逻辑
-│       ├── benchmark.py   # 基准评测核心逻辑
-│       ├── oracle_optimal.py
-│       └── validator.py
-├── ARCHITECTURE.md    # 架构说明（与代码一致）
+│   ├── pipeline/
+│   │   ├── train.py       # 训练核心逻辑
+│   │   ├── pretrain.py    # 评估与导出核心逻辑
+│   │   ├── rollout.py     # 单次运行求解
+│   │   ├── evaluate.py    # 多次运行详细分析
+│   │   └── benchmark.py   # 评价基准
+│
 └── README.md
 ```
 

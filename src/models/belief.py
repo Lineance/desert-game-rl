@@ -188,10 +188,7 @@ class WeatherBeliefModel:
                 return Weather.SUNNY
         elif risk_type == "cvar":
             # 条件风险价值：考虑尾部风险
-            sorted_probs = np.sort(self.current_belief.probs)[::-1]
-            cumsum = np.cumsum(sorted_probs)
-            # 找到95%置信区间内的最坏情况
-            idx = np.searchsorted(cumsum, 0.95)
+            # 找到95%置信区间内的最坏情况（当前实现近似为最高概率天气）
             return np.argsort(self.current_belief.probs)[-1]
         else:
             return np.argmax(self.current_belief.probs)

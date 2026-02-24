@@ -1,10 +1,10 @@
 import pandas as pd
 
-from src.pipeline.validator import RLResultValidator, build_validation_config
+from src.utils.validator import RLResultValidator, _build_validation_config
 
 
 def test_validator_flags_sandstorm_move():
-    cfg = build_validation_config(3)
+    cfg = _build_validation_config(3)
     df = pd.DataFrame(
         [
             {
@@ -36,7 +36,7 @@ def test_validator_flags_sandstorm_move():
 
 
 def test_validator_flags_non_village_purchase():
-    cfg = build_validation_config(3)
+    cfg = _build_validation_config(3)
     df = pd.DataFrame(
         [
             {
@@ -68,7 +68,7 @@ def test_validator_flags_non_village_purchase():
 
 
 def test_validator_flags_leaving_end_after_reached():
-    cfg = build_validation_config(3)
+    cfg = _build_validation_config(3)
     df = pd.DataFrame(
         [
             {

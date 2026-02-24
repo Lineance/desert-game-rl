@@ -43,7 +43,7 @@ def test_benchmark_main_writes_output_json(monkeypatch, tmp_path):
         ],
     )
 
-    benchmark.main()
+    benchmark.benchmark_main()
 
     payload = json.loads(out_path.read_text(encoding="utf-8"))
     assert payload["level"] == 3
@@ -81,7 +81,7 @@ def test_benchmark_main_min_success_rate_failure(monkeypatch):
     )
 
     with pytest.raises(SystemExit):
-        benchmark.main()
+        benchmark.benchmark_main()
 
 
 def test_benchmark_main_invalid_weather_mode(monkeypatch):
@@ -101,4 +101,4 @@ def test_benchmark_main_invalid_weather_mode(monkeypatch):
     )
 
     with pytest.raises(SystemExit):
-        benchmark.main()
+        benchmark.benchmark_main()

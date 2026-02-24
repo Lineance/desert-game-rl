@@ -1,10 +1,10 @@
 import pandas as pd
 
-from src.pipeline.validator import RLResultValidator, build_validation_config
+from src.utils.validator import RLResultValidator, _build_validation_config
 
 
 def test_validator_flags_mine_on_arrival():
-    cfg = build_validation_config(3)
+    cfg = _build_validation_config(3)
     df = pd.DataFrame(
         [
             {
@@ -54,7 +54,7 @@ def test_validator_flags_mine_on_arrival():
 
 
 def test_validator_flags_resource_mismatch():
-    cfg = build_validation_config(3)
+    cfg = _build_validation_config(3)
     df = pd.DataFrame(
         [
             {
@@ -86,7 +86,7 @@ def test_validator_flags_resource_mismatch():
 
 
 def test_validator_flags_wrong_village_price():
-    cfg = build_validation_config(3)
+    cfg = _build_validation_config(3)
     cfg.villages.add(cfg.start)
 
     df = pd.DataFrame(
@@ -120,7 +120,7 @@ def test_validator_flags_wrong_village_price():
 
 
 def test_validator_flags_non_adjacent_move():
-    cfg = build_validation_config(3)
+    cfg = _build_validation_config(3)
     start = cfg.start
     non_neighbor = next(
         n for n in range(1, cfg.end + 1) if n not in cfg.adjacency[start] and n != start
@@ -156,7 +156,7 @@ def test_validator_flags_non_adjacent_move():
 
 
 def test_validator_flags_end_refund_mismatch():
-    cfg = build_validation_config(3)
+    cfg = _build_validation_config(3)
     df = pd.DataFrame(
         [
             {
@@ -206,7 +206,7 @@ def test_validator_flags_end_refund_mismatch():
 
 
 def test_validator_flags_sandstorm_mining_consumption():
-    cfg = build_validation_config(3)
+    cfg = _build_validation_config(3)
     mine = next(iter(cfg.mines))
     start = cfg.start
 

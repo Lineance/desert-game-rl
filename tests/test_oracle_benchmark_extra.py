@@ -2,7 +2,7 @@ import pytest
 
 from src.env.config import Level3Config, Weather
 from src.pipeline.benchmark import _build_oracle_detailed, _summarize_oracle_detailed
-from src.pipeline.oracle import solve_theoretical_optimal
+from src.utils.oracle import solve_theoretical_optimal
 
 
 def test_oracle_invalid_level_raises():

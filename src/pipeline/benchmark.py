@@ -23,153 +23,8 @@ import torch
 
 from src.env.config import Level3Config, Level4Config, Level35Config
 from src.env.environment import make_env
-from src.models.agent import HybridRNNAgent
-from src.pipeline.evaluate import run_episode
-from src.pipeline.oracle import solve_theoretical_optimal
-
-
-def _get_weather_modes(level: int) -> List[str]:
-
-    if level == 3:
-        cfg = Level3Config
-    elif level == 4:
-        cfg = Level4Config
-    else:
-        cfg = Level35Config
-
-    return list(cfg.WEATHER_MODES.keys())
-
-
-def _get_init_money(level: int) -> float:
-    cfg = Level3Config if level == 3 else Level4Config
-    return float(cfg.INIT_MONEY)
-
-
-def _validate_weather_modes(level: int, weather_modes: List[str]) -> None:
-
-    valid_modes = set(_get_weather_modes(level))
-
-    invalid = [mode for mode in weather_modes if mode not in valid_modes]
-    if invalid:
-        raise ValueError(
-            f"Invalid weather modes for level {level}: {invalid}. "
-            f"Valid modes: {sorted(valid_modes)}"
-        )
-
-
-def _summarize(results: List[Dict], level: int) -> Dict[str, float]:
-    if not results:
-        return {
-            "runs": 0,
-            "success_rate": 0.0,
-            "avg_final_money": 0.0,
-            "avg_return": 0.0,
-            "avg_length": 0.0,
-            "early_fail_rate": 0.0,
-        }
-
-    reached = [1 if r["reached"] else 0 for r in results]
-
-    final_moneys = [float(r["final_money"]) for r in results]
-
-    init_money = _get_init_money(level)
-    returns = [float(r["final_money"]) - init_money for r in results]
-
-    lengths = [int(r["length"]) for r in results]
-
-    early_fail = [1 if (not r["reached"] and r["length"] <= 2) else 0 for r in results]
-
-    return {
-        "runs": len(results),
-        "success_rate": float(mean(reached)),
-        "avg_final_money": float(mean(final_moneys)),
-        "avg_return": float(mean(returns)),
-        "avg_length": float(mean(lengths)),
-        "early_fail_rate": float(mean(early_fail)),
-    }
-
-
-def _normalize_result(result: Dict[str, Any]) -> Dict[str, Any]:
-
-    return {
-        "reached": bool(result.get("reached", False)),
-        "final_money": float(result.get("final_money", 0.0)),
-        "return": float(result.get("return", 0.0)),
-        "length": int(result.get("length", 0)),
-    }
-
-
-def _summarize_detailed(
-    detailed: Dict[str, List[Dict]],
-    level: int,
-) -> Dict[str, Dict[str, float]]:
-
-    summary: Dict[str, Dict[str, float]] = {}
-
-    all_results: List[Dict[str, Any]] = []
-
-    for mode, records in detailed.items():
-        normalized = [_normalize_result(r) for r in records]
-
-        summary[mode] = _summarize(normalized, level)
-
-        all_results.extend(normalized)
-
-    summary["overall"] = _summarize(all_results, level)
-
-    return summary
-
-
-def _random_policy_episode(env, seed: Optional[int] = None) -> Dict:
-    rng = np.random.default_rng(seed)
-
-    obs, info = env.reset(seed=seed)
-
-    done = False
-
-    steps = 0
-
-    episode_return = 0.0
-
-    while not done and steps < 200:
-        va = env.get_valid_actions()
-
-        move = int(rng.choice(va["valid_moves"]))
-
-        mine = bool(va.get("can_mine", False) and rng.random() < 0.5)
-
-        if va.get("can_buy", False):
-            max_w = int(va.get("max_buy_water", 0))
-
-            max_f = int(va.get("max_buy_food", 0))
-
-            buy_water = int(rng.integers(0, max_w + 1)) if max_w > 0 else 0
-
-            buy_food = int(rng.integers(0, max_f + 1)) if max_f > 0 else 0
-        else:
-            buy_water, buy_food = 0, 0
-
-        action = {
-            "move": move,
-            "mine": mine,
-            "buy_water": buy_water,
-            "buy_food": buy_food,
-        }
-
-        obs, reward, done, truncated, info = env.step(action)
-
-        episode_return += float(reward)
-
-        steps += 1
-        if truncated:
-            break
-
-    return {
-        "return": episode_return,
-        "reached": bool(info.get("reached", False)),
-        "final_money": float(info.get("money", 0.0)),
-        "length": int(steps),
-    }
+from src.pipeline.evaluate import load_agent_for_eval, run_episodes
+from src.utils.oracle import solve_theoretical_optimal
 
 
 def evaluate_model(
@@ -181,22 +36,22 @@ def evaluate_model(
     deterministic: bool,
 ) -> Dict[str, List[Dict]]:
 
-    agent = HybridRNNAgent.load(agent_path, device=device)
-    agent.eval()
+    agent, _ = load_agent_for_eval(agent_path, device)
 
     detailed: Dict[str, List[Dict]] = {}
 
     for mode in weather_modes:
         env = make_env(level=level, weather_mode=mode, seed=None)
 
-        mode_results: List[Dict] = []
-        for seed in range(runs):
-            result = run_episode(agent, env, seed=seed, deterministic=deterministic, verbose=False)
-
-            result["seed"] = seed
-
+        mode_results = run_episodes(
+            agent,
+            env,
+            runs,
+            deterministic=deterministic,
+            include_seed=True,
+        )
+        for result in mode_results:
             result["weather_mode"] = mode
-            mode_results.append(result)
 
         detailed[mode] = mode_results
 
@@ -223,125 +78,6 @@ def evaluate_random_baseline(
         summary[mode] = _summarize(mode_results, level)
 
     summary["overall"] = _summarize(all_results, level)
-
-    return summary
-
-
-def _print_summary(title: str, summary: Dict[str, Dict[str, float]]) -> None:
-
-    print(f"\n{title}")
-
-    print("=" * 78)
-
-    print(f"{'模式':<18}{'成功率':>10}{'均资金':>12}{'均净收益':>12}{'均步长':>10}{'早死率':>10}")
-
-    for mode, stats in summary.items():
-        print(
-            f"{mode:<18}"
-            f"{stats['success_rate'] * 100:>9.1f}%"
-            f"{stats['avg_final_money']:>12.2f}"
-            f"{stats['avg_return']:>12.2f}"
-            f"{stats['avg_length']:>10.1f}"
-            f"{stats['early_fail_rate'] * 100:>9.1f}%"
-        )
-
-
-def _build_oracle_detailed(
-    level: int,
-    runs: int,
-    weather_modes: List[str],
-    oracle_time_limit: int,
-) -> Dict[str, List[Dict[str, Any]]]:
-
-    detailed: Dict[str, List[Dict[str, Any]]] = {mode: [] for mode in weather_modes}
-
-    for mode in weather_modes:
-        env = make_env(level=level, weather_mode=mode, seed=None)
-        for seed in range(runs):
-            env.reset(seed=seed)
-
-            if env.state is None:
-                continue
-
-            weather_seq = list(env.state.weather_future)
-
-            oracle = solve_theoretical_optimal(level, weather_seq, time_limit=oracle_time_limit)
-
-            detailed[mode].append(
-                {
-                    "seed": seed,
-                    "weather_mode": mode,
-                    "status": oracle.get("status", "Unknown"),
-                    "objective": float(oracle.get("objective", 0.0)),
-                    "reached": bool(oracle.get("reached", False)),
-                    "final_money": float(oracle.get("final_money", 0.0)),
-                    "final_water": float(oracle.get("final_water", 0.0)),
-                    "final_food": float(oracle.get("final_food", 0.0)),
-                    "reach_day": int(oracle.get("reach_day", 0)),
-                    "length": int(oracle.get("length", 0)),
-                    "return": float(oracle.get("return", oracle.get("objective", 0.0))),
-                }
-            )
-
-    return detailed
-
-
-def _summarize_oracle_detailed(
-    detailed: Dict[str, List[Dict[str, Any]]],
-    level: int,
-) -> Dict[str, Dict[str, float]]:
-
-    summary: Dict[str, Dict[str, float]] = {}
-
-    overall_values: List[float] = []
-
-    overall_solved = 0
-
-    overall_runs = 0
-
-    overall_results: List[Dict[str, Any]] = []
-
-    for mode, records in detailed.items():
-        values: List[float] = []
-
-        solved = 0
-
-        normalized = [_normalize_result(r) for r in records]
-
-        base_summary = _summarize(normalized, level)
-
-        overall_results.extend(normalized)
-        for r in records:
-            obj = float(r.get("objective", 0.0))
-
-            if np.isfinite(obj):
-                values.append(obj)
-
-                overall_values.append(obj)
-
-            if r.get("status") == "Optimal":
-                solved += 1
-
-                overall_solved += 1
-        runs = len(records)
-
-        overall_runs += runs
-
-        avg_obj = float(mean(values)) if values else 0.0
-
-        summary[mode] = {
-            **base_summary,
-            "oracle_solved_rate": solved / runs if runs > 0 else 0.0,
-            "oracle_avg_objective": avg_obj,
-        }
-
-    overall_base = _summarize(overall_results, level)
-
-    summary["overall"] = {
-        **overall_base,
-        "oracle_solved_rate": overall_solved / overall_runs if overall_runs > 0 else 0.0,
-        "oracle_avg_objective": float(mean(overall_values)) if overall_values else 0.0,
-    }
 
     return summary
 
@@ -403,59 +139,7 @@ def compare_model_vs_oracle(
     return comp
 
 
-def _print_oracle_summary(title: str, summary: Dict[str, Dict[str, float]]) -> None:
-
-    print(f"\n{title}")
-
-    print("=" * 78)
-
-    if "oracle_avg_objective" in next(iter(summary.values()), {}):
-        print(f"{'模式':<18}{'求解率':>10}{'均资金':>12}{'均净收益':>12}{'均步长':>10}")
-
-        for mode, stats in summary.items():
-            print(
-                f"{mode:<18}"
-                f"{stats.get('oracle_solved_rate', 0.0) * 100:>9.1f}%"
-                f"{stats.get('avg_final_money', 0.0):>16.2f}"
-                f"{stats.get('avg_return', 0.0):>12.2f}"
-                f"{stats.get('avg_length', 0.0):>12.2f}"
-            )
-    else:
-        print(f"{'模式':<18}{'求解率':>10}{'资金/Oracle':>14}{'OracleGap':>12}")
-
-        for mode, stats in summary.items():
-            if mode == "overall":
-                print(
-                    f"{mode:<18}"
-                    f"{'-':>10}"
-                    f"{stats.get('avg_money_to_oracle_ratio', 0.0):>13.3f}"
-                    f"{stats.get('avg_oracle_gap', 0.0):>12.2f}"
-                )
-            else:
-                print(
-                    f"{mode:<18}"
-                    f"{stats.get('oracle_solved_rate', 0.0) * 100:>9.1f}%"
-                    f"{stats.get('avg_money_to_oracle_ratio', 0.0):>13.3f}"
-                    f"{stats.get('avg_oracle_gap', 0.0):>12.2f}"
-                )
-
-
-def _resolve_output_json_path(output_arg: str) -> Path:
-
-    path = Path(output_arg)
-
-    if path.exists() and path.is_dir():
-        return path / "benchmark.json"
-
-    if path.suffix == "" and not path.exists():
-        path.mkdir(parents=True, exist_ok=True)
-
-        return path / "benchmark.json"
-
-    return path
-
-
-def main() -> None:
+def benchmark_main() -> None:
 
     parser = argparse.ArgumentParser(description="task2 模型基准评测")
     parser.add_argument(
@@ -602,5 +286,321 @@ def main() -> None:
             )
 
 
+def _get_weather_modes(level: int) -> List[str]:
+
+    if level == 3:
+        cfg = Level3Config
+    elif level == 4:
+        cfg = Level4Config
+    else:
+        cfg = Level35Config
+
+    return list(cfg.WEATHER_MODES.keys())
+
+
+def _get_init_money(level: int) -> float:
+    cfg = Level3Config if level == 3 else Level4Config
+    return float(cfg.INIT_MONEY)
+
+
+def _validate_weather_modes(level: int, weather_modes: List[str]) -> None:
+
+    valid_modes = set(_get_weather_modes(level))
+
+    invalid = [mode for mode in weather_modes if mode not in valid_modes]
+    if invalid:
+        raise ValueError(
+            f"Invalid weather modes for level {level}: {invalid}. "
+            f"Valid modes: {sorted(valid_modes)}"
+        )
+
+
+def _summarize(results: List[Dict], level: int) -> Dict[str, float]:
+    if not results:
+        return {
+            "runs": 0,
+            "success_rate": 0.0,
+            "avg_final_money": 0.0,
+            "avg_return": 0.0,
+            "avg_length": 0.0,
+            "early_fail_rate": 0.0,
+        }
+
+    reached = [1 if r["reached"] else 0 for r in results]
+
+    final_moneys = [float(r["final_money"]) for r in results]
+
+    init_money = _get_init_money(level)
+    returns = [float(r["final_money"]) - init_money for r in results]
+
+    lengths = [int(r["length"]) for r in results]
+
+    early_fail = [1 if (not r["reached"] and r["length"] <= 2) else 0 for r in results]
+
+    return {
+        "runs": len(results),
+        "success_rate": float(mean(reached)),
+        "avg_final_money": float(mean(final_moneys)),
+        "avg_return": float(mean(returns)),
+        "avg_length": float(mean(lengths)),
+        "early_fail_rate": float(mean(early_fail)),
+    }
+
+
+def _normalize_result(result: Dict[str, Any]) -> Dict[str, Any]:
+
+    return {
+        "reached": bool(result.get("reached", False)),
+        "final_money": float(result.get("final_money", 0.0)),
+        "return": float(result.get("return", 0.0)),
+        "length": int(result.get("length", 0)),
+    }
+
+
+def _summarize_detailed(
+    detailed: Dict[str, List[Dict]],
+    level: int,
+) -> Dict[str, Dict[str, float]]:
+
+    summary: Dict[str, Dict[str, float]] = {}
+
+    all_results: List[Dict[str, Any]] = []
+
+    for mode, records in detailed.items():
+        normalized = [_normalize_result(r) for r in records]
+
+        summary[mode] = _summarize(normalized, level)
+
+        all_results.extend(normalized)
+
+    summary["overall"] = _summarize(all_results, level)
+
+    return summary
+
+
+def _random_policy_episode(env, seed: Optional[int] = None) -> Dict:
+    rng = np.random.default_rng(seed)
+
+    obs, info = env.reset(seed=seed)
+
+    done = False
+
+    steps = 0
+
+    episode_return = 0.0
+
+    while not done and steps < 200:
+        va = env.get_valid_actions()
+
+        move = int(rng.choice(va["valid_moves"]))
+
+        mine = bool(va.get("can_mine", False) and rng.random() < 0.5)
+
+        if va.get("can_buy", False):
+            max_w = int(va.get("max_buy_water", 0))
+
+            max_f = int(va.get("max_buy_food", 0))
+
+            buy_water = int(rng.integers(0, max_w + 1)) if max_w > 0 else 0
+
+            buy_food = int(rng.integers(0, max_f + 1)) if max_f > 0 else 0
+        else:
+            buy_water, buy_food = 0, 0
+
+        action = {
+            "move": move,
+            "mine": mine,
+            "buy_water": buy_water,
+            "buy_food": buy_food,
+        }
+
+        obs, reward, done, truncated, info = env.step(action)
+
+        episode_return += float(reward)
+
+        steps += 1
+        if truncated:
+            break
+
+    return {
+        "return": episode_return,
+        "reached": bool(info.get("reached", False)),
+        "final_money": float(info.get("money", 0.0)),
+        "length": int(steps),
+    }
+
+
+def _print_summary(title: str, summary: Dict[str, Dict[str, float]]) -> None:
+
+    print(f"\n{title}")
+
+    print("=" * 78)
+
+    print(f"{'模式':<18}{'成功率':>10}{'均资金':>12}{'均净收益':>12}{'均步长':>10}{'早死率':>10}")
+
+    for mode, stats in summary.items():
+        print(
+            f"{mode:<18}"
+            f"{stats['success_rate'] * 100:>9.1f}%"
+            f"{stats['avg_final_money']:>12.2f}"
+            f"{stats['avg_return']:>12.2f}"
+            f"{stats['avg_length']:>10.1f}"
+            f"{stats['early_fail_rate'] * 100:>9.1f}%"
+        )
+
+
+def _build_oracle_detailed(
+    level: int,
+    runs: int,
+    weather_modes: List[str],
+    oracle_time_limit: int,
+) -> Dict[str, List[Dict[str, Any]]]:
+
+    detailed: Dict[str, List[Dict[str, Any]]] = {mode: [] for mode in weather_modes}
+
+    for mode in weather_modes:
+        env = make_env(level=level, weather_mode=mode, seed=None)
+        for seed in range(runs):
+            env.reset(seed=seed)
+
+            if env.state is None:
+                continue
+
+            weather_seq = list(env.state.weather_future)
+
+            oracle = solve_theoretical_optimal(level, weather_seq, time_limit=oracle_time_limit)
+
+            detailed[mode].append(
+                {
+                    "seed": seed,
+                    "weather_mode": mode,
+                    "status": oracle.get("status", "Unknown"),
+                    "objective": float(oracle.get("objective", 0.0)),
+                    "reached": bool(oracle.get("reached", False)),
+                    "final_money": float(oracle.get("final_money", 0.0)),
+                    "final_water": float(oracle.get("final_water", 0.0)),
+                    "final_food": float(oracle.get("final_food", 0.0)),
+                    "reach_day": int(oracle.get("reach_day", 0)),
+                    "length": int(oracle.get("length", 0)),
+                    "return": float(oracle.get("return", oracle.get("objective", 0.0))),
+                }
+            )
+
+    return detailed
+
+
+def _summarize_oracle_detailed(
+    detailed: Dict[str, List[Dict[str, Any]]],
+    level: int,
+) -> Dict[str, Dict[str, float]]:
+
+    summary: Dict[str, Dict[str, float]] = {}
+
+    overall_values: List[float] = []
+
+    overall_solved = 0
+
+    overall_runs = 0
+
+    overall_results: List[Dict[str, Any]] = []
+
+    for mode, records in detailed.items():
+        values: List[float] = []
+
+        solved = 0
+
+        normalized = [_normalize_result(r) for r in records]
+
+        base_summary = _summarize(normalized, level)
+
+        overall_results.extend(normalized)
+        for r in records:
+            obj = float(r.get("objective", 0.0))
+
+            if np.isfinite(obj):
+                values.append(obj)
+
+                overall_values.append(obj)
+
+            if r.get("status") == "Optimal":
+                solved += 1
+
+                overall_solved += 1
+        runs = len(records)
+
+        overall_runs += runs
+
+        avg_obj = float(mean(values)) if values else 0.0
+
+        summary[mode] = {
+            **base_summary,
+            "oracle_solved_rate": solved / runs if runs > 0 else 0.0,
+            "oracle_avg_objective": avg_obj,
+        }
+
+    overall_base = _summarize(overall_results, level)
+
+    summary["overall"] = {
+        **overall_base,
+        "oracle_solved_rate": overall_solved / overall_runs if overall_runs > 0 else 0.0,
+        "oracle_avg_objective": float(mean(overall_values)) if overall_values else 0.0,
+    }
+
+    return summary
+
+
+def _print_oracle_summary(title: str, summary: Dict[str, Dict[str, float]]) -> None:
+
+    print(f"\n{title}")
+
+    print("=" * 78)
+
+    if "oracle_avg_objective" in next(iter(summary.values()), {}):
+        print(f"{'模式':<18}{'求解率':>10}{'均资金':>12}{'均净收益':>12}{'均步长':>10}")
+
+        for mode, stats in summary.items():
+            print(
+                f"{mode:<18}"
+                f"{stats.get('oracle_solved_rate', 0.0) * 100:>9.1f}%"
+                f"{stats.get('avg_final_money', 0.0):>16.2f}"
+                f"{stats.get('avg_return', 0.0):>12.2f}"
+                f"{stats.get('avg_length', 0.0):>12.2f}"
+            )
+    else:
+        print(f"{'模式':<18}{'求解率':>10}{'资金/Oracle':>14}{'OracleGap':>12}")
+
+        for mode, stats in summary.items():
+            if mode == "overall":
+                print(
+                    f"{mode:<18}"
+                    f"{'-':>10}"
+                    f"{stats.get('avg_money_to_oracle_ratio', 0.0):>13.3f}"
+                    f"{stats.get('avg_oracle_gap', 0.0):>12.2f}"
+                )
+            else:
+                print(
+                    f"{mode:<18}"
+                    f"{stats.get('oracle_solved_rate', 0.0) * 100:>9.1f}%"
+                    f"{stats.get('avg_money_to_oracle_ratio', 0.0):>13.3f}"
+                    f"{stats.get('avg_oracle_gap', 0.0):>12.2f}"
+                )
+
+
+def _resolve_output_json_path(output_arg: str) -> Path:
+
+    path = Path(output_arg)
+
+    if path.exists() and path.is_dir():
+        return path / "benchmark.json"
+
+    if path.suffix == "" and not path.exists():
+        path.mkdir(parents=True, exist_ok=True)
+
+        return path / "benchmark.json"
+
+    return path
+
+
 if __name__ == "__main__":
-    main()
+    benchmark_main()
+    benchmark_main()

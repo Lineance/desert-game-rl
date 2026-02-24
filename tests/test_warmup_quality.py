@@ -8,8 +8,8 @@ from src.env.environment import make_env
 from src.models.agent import create_agent
 from src.models.belief import WeatherBeliefModel
 from src.models.ppo import PPOTrainer
-from src.pipeline.oracle import solve_theoretical_plan
-from src.pipeline.warmup import _sanitize_oracle_action, warmup_with_oracle
+from src.pipeline.pretrain import _sanitize_oracle_action, warmup_with_oracle
+from src.utils.oracle import solve_theoretical_plan
 
 
 def _fixed_sequence(num_days: int) -> List[int]:
@@ -99,6 +99,7 @@ def test_warmup_critic_mc_smoke(monkeypatch):
     assert abs(value - target) / denom < 0.5
 
 
+@pytest.mark.random
 @pytest.mark.slow
 def test_warmup_behavior_cloning_match_rate(monkeypatch):
     env = make_env(level=3, weather_mode="no_sandstorm", seed=0)

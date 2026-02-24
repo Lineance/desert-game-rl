@@ -16,18 +16,34 @@ def test_get_weather_modes_level3_and_level4():
 
 def test_evaluate_model_detailed_adds_seed_and_mode(monkeypatch):
     def fake_load(path, device="cpu"):
-        return _FakeAgent()
+        return _FakeAgent(), "cpu"
 
-    def fake_run_episode(agent, env, seed=None, deterministic=True, verbose=False):
-        return {
-            "reached": True,
-            "final_money": 1000.0 + seed,
-            "return": 1.0,
-            "length": 3,
-        }
+    def fake_run_episodes(
+        agent,
+        env,
+        runs,
+        deterministic,
+        *,
+        verbose=False,
+        include_seed=False,
+        progress_every=None,
+        progress_fn=None,
+    ):
+        results = []
+        for seed in range(runs):
+            result = {
+                "reached": True,
+                "final_money": 1000.0 + seed,
+                "return": 1.0,
+                "length": 3,
+            }
+            if include_seed:
+                result["seed"] = seed
+            results.append(result)
+        return results
 
-    monkeypatch.setattr(benchmark.HybridRNNAgent, "load", staticmethod(fake_load))
-    monkeypatch.setattr(benchmark, "run_episode", fake_run_episode)
+    monkeypatch.setattr(benchmark, "load_agent_for_eval", fake_load)
+    monkeypatch.setattr(benchmark, "run_episodes", fake_run_episodes)
 
     out = benchmark.evaluate_model(
         agent_path="dummy.pt",
