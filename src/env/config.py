@@ -293,12 +293,6 @@ class RLConfig:
     ENTROPY_COEF = 0.03  # 熵系数（降低无效随机探索）
     MIN_ENTROPY = 0.5  # 新增：熵下限，防止归零
 
-    # 课程学习（第三关简单，直接训练）
-    USE_CURRICULUM = False  # 禁用课程学习，直接训练
-    CURRICULUM_STAGES = [
-        {"days": 10, "weather_known": False, "mode": "no_sandstorm"},
-    ]
-
     # 评估参数
     EVAL_INTERVAL = 100  # 评估间隔
     EVAL_EPISODES = 50  # 评估回合数

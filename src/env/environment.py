@@ -284,7 +284,8 @@ class DesertCrossingEnv:
         if is_moving:
             # 先检查沙暴，再移动
             if s.weather_today == Weather.SANDSTORM:
-                reward -= 20.0
+                reward -= 50.0
+                is_moving = False
             elif move_target in self.neighbors[s.position]:
                 s.position = move_target
                 action_name = "移动"

@@ -469,39 +469,3 @@ class PPOTrainer:
         }
 
         return buffer, last_value, episode_info
-
-
-class CurriculumScheduler:
-    """课程学习调度器"""
-
-    def __init__(self, config: RLConfig):
-        self.stages = config.CURRICULUM_STAGES
-        self.current_stage = 0
-        self.episode_count = 0
-
-    def get_stage(self) -> Dict:
-        """获取当前阶段的配置"""
-        return self.stages[min(self.current_stage, len(self.stages) - 1)]
-
-    def update(self, performance: float):
-        """根据性能更新阶段"""
-        self.episode_count += 1
-
-        # 简单策略：每N个回合升级
-        episodes_per_stage = 500
-        new_stage = min(self.episode_count // episodes_per_stage, len(self.stages) - 1)
-
-        if new_stage > self.current_stage:
-            print(f"课程学习升级：阶段 {self.current_stage} -> {new_stage}")
-            self.current_stage = new_stage
-
-    def apply_to_env(self, env):
-        """将当前阶段配置应用到环境"""
-        stage = self.get_stage()
-        # 根据阶段调整环境参数
-        if "weather_known" in stage and stage["weather_known"]:
-            # 阶段1：全知天气
-            pass
-        if "mode" in stage:
-            env.weather_mode = stage["mode"]
-            env.weather_mode = stage["mode"]

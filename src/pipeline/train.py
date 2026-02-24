@@ -94,7 +94,6 @@ def _save_training_state(
     best_net_profit: float,
     stats: Optional[Dict[str, float]],
     epsilon: float,
-    curriculum_state: Optional[Dict[str, Any]] = None,
 ) -> None:
     scheduler = getattr(trainer, "scheduler", None) or getattr(trainer, "lr_scheduler", None)
     scheduler_state = scheduler.state_dict() if scheduler is not None else None
@@ -119,7 +118,6 @@ def _save_training_state(
             "best_net_profit": float(best_net_profit),
             "epsilon": float(epsilon),
             "stats": stats,
-            "curriculum_state": curriculum_state,
             "config": agent.config,
             "obs_dim": agent.obs_dim,
             "num_locations": agent.num_locations,
@@ -374,7 +372,6 @@ def _safe_save_latest(
     stats: Optional[Dict[str, float]],
     epsilon: float,
     reason: str,
-    curriculum_state: Optional[Dict[str, Any]] = None,
 ) -> None:
     try:
         _save_training_state(
@@ -386,7 +383,6 @@ def _safe_save_latest(
             best_net_profit,
             stats,
             epsilon,
-            curriculum_state,
         )
         print(f"已自动保存latest断点({reason}): episode={episode}, epsilon={epsilon:.3f}")
     except Exception as save_error:
@@ -411,9 +407,6 @@ def _init_structured_loggers(
             "final_money",
             "net_profit",
             "epsilon",
-            "curriculum_stage",
-            "curriculum_weather_mode",
-            "curriculum_stage_progress",
             "rolling_return",
             "rolling_net_profit",
             "rolling_success_rate",
@@ -476,12 +469,7 @@ def _log_structured_metrics(
         tb_writer.add_scalar("train/net_profit", row["net_profit"], episode)
         tb_writer.add_scalar("train/success_rate", row["rolling_success_rate"], episode)
         tb_writer.add_scalar("train/epsilon", row["epsilon"], episode)
-        tb_writer.add_scalar("train/curriculum_stage", row["curriculum_stage"], episode)
-        tb_writer.add_scalar(
-            "train/curriculum_stage_progress", row["curriculum_stage_progress"], episode
-        )
         tb_writer.add_scalar("train/rolling_net_profit", row["rolling_net_profit"], episode)
-        tb_writer.add_text("train/curriculum_weather_mode", row["curriculum_weather_mode"], episode)
         if stats is not None:
             tb_writer.add_scalar("train/policy_loss", row["policy_loss"], episode)
             tb_writer.add_scalar("train/value_loss", row["value_loss"], episode)
@@ -609,7 +597,9 @@ def train(
     eps_start = 0.30
     eps_end = 0.05
     eps_decay_episodes = max(1, int(num_episodes * 0.7))
-    split_train_mode, split_val_mode, split_test_mode = _resolve_weather_split_modes(level)
+    split_train_mode, split_val_mode, split_test_mode = _resolve_weather_split_modes(
+        level, selected_mode
+    )
     print(f"评估天气分布: train={split_train_mode}, val={split_val_mode}, test={split_test_mode}")
 
     if start_episode > 0:
