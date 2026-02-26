@@ -412,6 +412,9 @@ def _init_structured_loggers(
             "rolling_success_rate",
             "policy_loss",
             "value_loss",
+            "survival_value_loss",
+            "fund_value_loss",
+            "alpha_mean",
             "entropy",
             "approx_kl",
             "clip_fraction",
@@ -456,11 +459,28 @@ def _log_structured_metrics(
         "rolling_return": float(rolling_return),
         "rolling_net_profit": float(rolling_net_profit),
         "rolling_success_rate": float(rolling_success_rate),
-        "policy_loss": float(stats["policy_loss"]) if stats is not None else float("nan"),
-        "value_loss": float(stats["value_loss"]) if stats is not None else float("nan"),
-        "entropy": float(stats["entropy"]) if stats is not None else float("nan"),
-        "approx_kl": float(stats["approx_kl"]) if stats is not None else float("nan"),
-        "clip_fraction": float(stats["clip_fraction"]) if stats is not None else float("nan"),
+        "policy_loss": float(stats.get("policy_loss", float("nan")))
+        if stats is not None
+        else float("nan"),
+        "value_loss": float(stats.get("value_loss", float("nan")))
+        if stats is not None
+        else float("nan"),
+        "survival_value_loss": float(stats.get("survival_value_loss", float("nan")))
+        if stats is not None
+        else float("nan"),
+        "fund_value_loss": float(stats.get("fund_value_loss", float("nan")))
+        if stats is not None
+        else float("nan"),
+        "alpha_mean": float(stats.get("alpha_mean", float("nan")))
+        if stats is not None
+        else float("nan"),
+        "entropy": float(stats.get("entropy", float("nan"))) if stats is not None else float("nan"),
+        "approx_kl": float(stats.get("approx_kl", float("nan")))
+        if stats is not None
+        else float("nan"),
+        "clip_fraction": float(stats.get("clip_fraction", float("nan")))
+        if stats is not None
+        else float("nan"),
     }
     csv_writer.writerow(row)
 
@@ -473,6 +493,9 @@ def _log_structured_metrics(
         if stats is not None:
             tb_writer.add_scalar("train/policy_loss", row["policy_loss"], episode)
             tb_writer.add_scalar("train/value_loss", row["value_loss"], episode)
+            tb_writer.add_scalar("train/survival_value_loss", row["survival_value_loss"], episode)
+            tb_writer.add_scalar("train/fund_value_loss", row["fund_value_loss"], episode)
+            tb_writer.add_scalar("train/alpha_mean", row["alpha_mean"], episode)
             tb_writer.add_scalar("train/entropy", row["entropy"], episode)
             tb_writer.add_scalar("train/approx_kl", row["approx_kl"], episode)
             tb_writer.add_scalar("train/clip_fraction", row["clip_fraction"], episode)
@@ -750,18 +773,21 @@ def train(
                 if stats is not None:
                     print(
                         "  损失: "
-                        f"P={stats['policy_loss']:.4f}, "
-                        f"V={stats['value_loss']:.4f}, "
-                        f"H={stats['entropy']:.4f}, "
-                        f"KL={stats['approx_kl']:.4f}, "
-                        f"ClipFrac={stats['clip_fraction']:.3f}, "
-                        f"ExplVar={stats['explained_variance']:.3f}"
+                        f"P={stats.get('policy_loss', float('nan')):.4f}, "
+                        f"V={stats.get('value_loss', float('nan')):.4f}, "
+                        f"Vs={stats.get('survival_value_loss', float('nan')):.4f}, "
+                        f"Vf={stats.get('fund_value_loss', float('nan')):.4f}, "
+                        f"alpha={stats.get('alpha_mean', float('nan')):.3f}, "
+                        f"H={stats.get('entropy', float('nan')):.4f}, "
+                        f"KL={stats.get('approx_kl', float('nan')):.4f}, "
+                        f"ClipFrac={stats.get('clip_fraction', float('nan')):.3f}, "
+                        f"ExplVar={stats.get('explained_variance', float('nan')):.3f}"
                     )
                     print(
                         "  更新诊断: "
-                        f"effective_updates={int(stats['effective_updates'])}/{config.EPOCHS_PER_UPDATE}, "
-                        f"target_kl_hit={bool(stats['target_kl_hit'])}, "
-                        f"ratio=[{stats['min_ratio']:.3f}, {stats['max_ratio']:.3f}], "
+                        f"effective_updates={int(stats.get('effective_updates', 0.0))}/{config.EPOCHS_PER_UPDATE}, "
+                        f"target_kl_hit={bool(stats.get('target_kl_hit', 0.0))}, "
+                        f"ratio=[{stats.get('min_ratio', float('nan')):.3f}, {stats.get('max_ratio', float('nan')):.3f}], "
                         f"epsilon={epsilon:.3f}"
                     )
                 if stats is not None and rolling_success_rate > 0.85 and stats["entropy"] < 0.15:

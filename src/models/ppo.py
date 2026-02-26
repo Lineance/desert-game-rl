@@ -14,6 +14,7 @@ import torch.optim as optim
 
 from src.env.config import RLConfig
 from src.models.agent import Agent
+from src.utils.training_utils import clip_gradients, compute_gae, dynamic_alpha
 
 
 @dataclass
@@ -45,6 +46,7 @@ class RolloutBuffer:
         self.dones: List[bool] = []
         self.hidden_states: List[Optional[Tuple]] = []
         self.valid_actions_list: List[Optional[Dict]] = []  # 存储valid_actions
+        self.episode_reached: bool = False
 
     def add(
         self,
@@ -93,31 +95,14 @@ class RolloutBuffer:
             returns: 折扣回报
             advantages: 优势估计
         """
-        returns = []
-        advantages = []
-
-        gae = 0
-        next_value = last_value
-
-        for t in reversed(range(len(self.rewards))):
-            if t == len(self.rewards) - 1:
-                next_non_terminal = 1.0 - self.dones[t]
-                next_value = last_value
-            else:
-                next_non_terminal = 1.0 - self.dones[t]
-                next_value = self.values[t + 1]
-
-            # TD误差
-            delta = self.rewards[t] + gamma * next_value * next_non_terminal - self.values[t]
-
-            # GAE
-            gae = delta + gamma * gae_lambda * next_non_terminal * gae
-            advantages.insert(0, gae)
-
-            # 回报 = 优势 + 价值
-            returns.insert(0, gae + self.values[t])
-
-        return returns, advantages
+        return compute_gae(
+            rewards=self.rewards,
+            values=self.values,
+            dones=self.dones,
+            last_value=last_value,
+            gamma=gamma,
+            gae_lambda=gae_lambda,
+        )
 
     def get_batch(self) -> Dict:
         """获取批量数据"""
@@ -154,13 +139,15 @@ class PPOTrainer:
         self.optimizer = optim.Adam(
             [
                 {"params": agent.actor.parameters(), "lr": self.config.LR_ACTOR},
-                {"params": agent.critic.parameters(), "lr": self.config.LR_CRITIC},
                 {
-                    "params": agent.state_encoder.parameters(),
-                    "lr": self.config.LR_ACTOR,
+                    "params": list(agent.survival_critic.parameters())
+                    + list(agent.fund_critic.parameters()),
+                    "lr": self.config.LR_CRITIC,
                 },
                 {
-                    "params": agent.belief_encoder.parameters(),
+                    "params": list(agent.resource_encoder.parameters())
+                    + list(agent.graph_encoder.parameters())
+                    + list(agent.fusion.parameters()),
                     "lr": self.config.LR_ACTOR,
                 },
             ]
@@ -219,6 +206,9 @@ class PPOTrainer:
         # 多轮更新
         total_policy_loss = 0
         total_value_loss = 0
+        total_survival_value_loss = 0
+        total_fund_value_loss = 0
+        total_alpha_mean = 0
         total_entropy = 0
         total_kl = 0
         total_clip_fraction = 0
@@ -235,6 +225,8 @@ class PPOTrainer:
             # 逐个处理（保证valid_actions正确性）
             batch_new_log_probs = []
             batch_entropy = []
+            batch_new_survival_values = []
+            batch_new_fund_values = []
             batch_new_values = []
 
             for i in range(len(obs_tensor)):
@@ -243,20 +235,30 @@ class PPOTrainer:
                 valid_i = rollout_buffer.valid_actions_list[i]
 
                 # 编码观测
-                state_i = self.agent.encode_observation(obs_i)
+                state_i, node_embeddings_i, day_norm_i = self.agent.encode_observation_full(obs_i)
 
                 # 评估动作（传入valid_actions）
                 new_log_prob_i, entropy_i = self.agent.actor.evaluate_actions(
-                    state_i, action_i, valid_i
+                    state_i,
+                    node_embeddings_i,
+                    day_norm_i,
+                    action_i,
+                    valid_i,
                 )
-                new_value_i = self.agent.critic(state_i).squeeze(-1)
+                new_survival = self.agent.survival_critic(state_i).squeeze(-1)
+                new_fund = self.agent.fund_critic(state_i).squeeze(-1)
+                new_value_i = 0.5 * (new_survival + new_fund)
 
                 batch_new_log_probs.append(new_log_prob_i)
                 batch_entropy.append(entropy_i)
+                batch_new_survival_values.append(new_survival)
+                batch_new_fund_values.append(new_fund)
                 batch_new_values.append(new_value_i)
 
             new_log_probs = torch.cat(batch_new_log_probs)
             entropy = torch.cat(batch_entropy)
+            new_survival_values = torch.cat(batch_new_survival_values)
+            new_fund_values = torch.cat(batch_new_fund_values)
             new_values = torch.cat(batch_new_values)
             old_values = values_tensor  # 用于价值裁剪
 
@@ -278,13 +280,37 @@ class PPOTrainer:
             )
             policy_loss = -torch.min(surr1, surr2).mean()
 
-            # 价值裁剪
-            value_pred_clipped = old_values + torch.clamp(
-                new_values - old_values, -self.config.CLIP_EPS, self.config.CLIP_EPS
+            # 动态权重 alpha（基于观测中的资源比例与终点距离）
+            water_ratio = torch.clamp(obs_tensor[:, 2], 0.0, 1.0)
+            food_ratio = torch.clamp(obs_tensor[:, 3], 0.0, 1.0)
+            dist_to_end_ratio = torch.clamp(obs_tensor[:, 5], 0.0, 1.0)
+            alpha = dynamic_alpha(water_ratio, food_ratio, dist_to_end_ratio)
+
+            # Survival Critic 损失（回合成败监督）
+            survival_target = torch.full_like(
+                new_survival_values,
+                1.0 if rollout_buffer.episode_reached else 0.0,
             )
-            value_loss1 = (new_values - returns_tensor).pow(2)
-            value_loss2 = (value_pred_clipped - returns_tensor).pow(2)
-            value_loss = torch.max(value_loss1, value_loss2).mean()
+            survival_value_loss_element = nn.functional.binary_cross_entropy(
+                new_survival_values,
+                survival_target,
+                reduction="none",
+            )
+
+            # Fund Critic 损失（PPO 风格 value clipping）
+            value_pred_clipped = old_values + torch.clamp(
+                new_fund_values - old_values, -self.config.CLIP_EPS, self.config.CLIP_EPS
+            )
+            fund_value_loss1 = (new_fund_values - returns_tensor).pow(2)
+            fund_value_loss2 = (value_pred_clipped - returns_tensor).pow(2)
+            fund_value_loss_element = torch.max(fund_value_loss1, fund_value_loss2)
+
+            weighted_value_loss_element = (
+                alpha * survival_value_loss_element + (1.0 - alpha) * fund_value_loss_element
+            )
+            value_loss = weighted_value_loss_element.mean()
+            survival_value_loss = survival_value_loss_element.mean()
+            fund_value_loss = fund_value_loss_element.mean()
 
             # 熵奖励
             entropy_loss = -entropy.mean()
@@ -297,9 +323,10 @@ class PPOTrainer:
             loss.backward()
 
             # 梯度裁剪
-            nn.utils.clip_grad_norm_(self.agent.parameters(), self.config.MAX_GRAD_NORM)
+            clip_gradients(self.agent, self.config.MAX_GRAD_NORM)
 
             self.optimizer.step()
+            self.agent.update_targets(tau=0.995)
 
             # 统计
             with torch.no_grad():
@@ -308,6 +335,9 @@ class PPOTrainer:
 
             total_policy_loss += policy_loss.item()
             total_value_loss += value_loss.item()
+            total_survival_value_loss += survival_value_loss.item()
+            total_fund_value_loss += fund_value_loss.item()
+            total_alpha_mean += alpha.mean().item()
             total_entropy += entropy.mean().item()
             total_kl += approx_kl
             total_clip_fraction += clip_fraction
@@ -328,6 +358,9 @@ class PPOTrainer:
         return {
             "policy_loss": total_policy_loss / n,
             "value_loss": total_value_loss / n,
+            "survival_value_loss": total_survival_value_loss / n,
+            "fund_value_loss": total_fund_value_loss / n,
+            "alpha_mean": total_alpha_mean / n,
             "entropy": total_entropy / n,
             "approx_kl": total_kl / n,
             "clip_fraction": total_clip_fraction / n,
@@ -414,9 +447,13 @@ class PPOTrainer:
             action_idx = action  # 直接使用，不转换
             with torch.no_grad():
                 obs_tensor = torch.FloatTensor(obs).unsqueeze(0).to(self.device)
-                states = self.agent.encode_observation(obs_tensor)
+                state_i, node_embeddings_i, day_norm_i = self.agent.encode_observation_full(
+                    obs_tensor
+                )
                 new_log_probs, _ = self.agent.actor.evaluate_actions(
-                    states,
+                    state_i,
+                    node_embeddings_i,
+                    day_norm_i,
                     {
                         "move": torch.LongTensor([action_idx["move"]]).to(self.device),
                         "mine": torch.FloatTensor([action_idx["mine"]]).to(self.device),
@@ -452,7 +489,10 @@ class PPOTrainer:
         # 获取最后状态价值（用于GAE）
         with torch.no_grad():
             obs_tensor = torch.FloatTensor(obs).unsqueeze(0).to(self.device)
-            last_value = self.agent.critic(self.agent.encode_observation(obs_tensor)).item()
+            state_i, _, _ = self.agent.encode_observation_full(obs_tensor)
+            last_value = 0.5 * (
+                self.agent.survival_critic(state_i).item() + self.agent.fund_critic(state_i).item()
+            )
 
         episode_info = {
             "return": episode_return,
@@ -467,5 +507,7 @@ class PPOTrainer:
             "total_buy_water": total_buy_water,
             "total_buy_food": total_buy_food,
         }
+
+        buffer.episode_reached = bool(episode_info["reached"])
 
         return buffer, last_value, episode_info

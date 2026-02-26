@@ -22,7 +22,7 @@ def test_buy_logprob_masked_when_cannot_buy():
     agent = create_agent(env, device="cpu")
 
     obs_tensor = torch.tensor(obs, dtype=torch.float32).unsqueeze(0)
-    state = agent.encode_observation(obs_tensor)
+    state, node_embeddings, day_norm = agent.encode_observation_full(obs_tensor)
 
     valid_no_buy = {
         "valid_moves": [env.state.position],
@@ -45,7 +45,19 @@ def test_buy_logprob_masked_when_cannot_buy():
         "buy_food": torch.tensor([99.0]),
     }
 
-    logp_a, _ = agent.actor.evaluate_actions(state, actions_a, valid_no_buy)
-    logp_b, _ = agent.actor.evaluate_actions(state, actions_b, valid_no_buy)
+    logp_a, _ = agent.actor.evaluate_actions(
+        state,
+        node_embeddings,
+        day_norm,
+        actions_a,
+        valid_no_buy,
+    )
+    logp_b, _ = agent.actor.evaluate_actions(
+        state,
+        node_embeddings,
+        day_norm,
+        actions_b,
+        valid_no_buy,
+    )
 
     assert torch.allclose(logp_a, logp_b, atol=1e-6)
