@@ -96,13 +96,15 @@ def run_episode(
 
 
 def rollout_main():
-    parser = argparse.ArgumentParser(description="评估沙漠穿越智能体（单轮导出）")
+    parser = argparse.ArgumentParser(description="沙漠穿越智能执行")
     parser.add_argument("agent_path", type=str, help="智能体模型路径")
     parser.add_argument("--level", type=int, default=3, choices=[3, 4, 35], help="关卡")
     parser.add_argument("--output", type=str, default=str(RESULTS_DIR), help="输出目录")
-    parser.add_argument("--device", type=str, default=None, help="计算设备（cuda/cpu）")
+    parser.add_argument("--device", type=str, default=None, help="计算设备(cuda/cpu)")
     parser.add_argument("--seed", type=int, default=42, help="随机种子")
     parser.add_argument("--verbose", action="store_true", help="详细输出")
+    parser.add_argument("--majority-voting", type=bool, default=False, help="多次求解取最大值")
+    parser.add_argument("--episodes", type=int, default=50, help="运行次数")
 
     args = parser.parse_args()
 
@@ -111,15 +113,52 @@ def rollout_main():
     else:
         device = args.device
 
-    agent = Agent.load(args.agent_path, device=device)
-    agent.eval()
-    env = make_env(level=args.level, seed=None)
-
-    result = run_episode(agent, env, seed=args.seed, deterministic=True, verbose=args.verbose)
+    if args.majoriry_voting:
+        result = rollout_majority_voting(args.agent_path, args.level, args.episodes, device)
+    else:
+        agent = Agent.load(args.agent_path, device=device)
+        agent.eval()
+        env = make_env(level=args.level, seed=None)
+        result = run_episode(agent, env, seed=args.seed, deterministic=True, verbose=args.verbose)
 
     _analyze_strategy(result, env)
 
     _export_to_xlsx(result, f"{args.output}/level{args.level}_result.xlsx", args.level)
+
+
+def rollout_majority_voting(
+    agent_path: str,
+    level: int,
+    episodes: int = 50,
+    device: str = "cpu",
+):
+    # 加载智能体
+    agent = Agent.load(agent_path, device=device)
+    agent.eval()
+
+    # 创建环境
+    env = make_env(level=level, seed=None)
+
+    # 运行多次，选择最佳
+    print("\n寻找最佳策略...")
+    best_result = None
+    best_money = float("-inf")
+
+    for seed in range(episodes):
+        result = run_episode(agent, env, seed=seed, deterministic=True)
+        if result["reached"] and result["final_money"] > best_money:
+            best_money = result["final_money"]
+            best_result = result
+
+    if best_result is None:
+        print("警告: 未找到成功到达终点的策略")
+        # 选择回报最高的
+        best_result = max(
+            [run_episode(agent, env, seed=i, deterministic=True) for i in range(20)],
+            key=lambda x: x["return"],
+        )
+
+    return best_result
 
 
 def _export_to_csv(result: Dict, filepath: str, level: int):
@@ -130,8 +169,8 @@ def _export_to_csv(result: Dict, filepath: str, level: int):
     """
     import csv
 
-    filepath = Path(filepath)
-    filepath.parent.mkdir(parents=True, exist_ok=True)
+    filepath_path = Path(filepath)
+    filepath_path.parent.mkdir(parents=True, exist_ok=True)
 
     with open(filepath, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
@@ -178,8 +217,8 @@ def _export_to_xlsx(result: Dict, filepath: str, level: int):
         _export_to_csv(result, filepath.replace(".xlsx", ".csv"), level)
         return
 
-    filepath = Path(filepath)
-    filepath.parent.mkdir(parents=True, exist_ok=True)
+    filepath_path = Path(filepath)
+    filepath_path.parent.mkdir(parents=True, exist_ok=True)
 
     wb = Workbook()
     ws = wb.active
@@ -284,56 +323,6 @@ def _analyze_strategy(result: Dict, env):
     for r in records:
         weather_stats[r["weather"]] += 1
     print(f"  遇到天气: {weather_stats}")
-
-
-def _generate_result_excel(
-    agent_path: str, level: int, output_dir: str = str(RESULTS_DIR), device: str = None
-):
-    """
-    生成最终结果文件（选择最佳表现的运行）
-    """
-    if device is None:
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-
-    # 加载智能体
-    agent = Agent.load(agent_path, device=device)
-    agent.eval()
-
-    # 创建环境
-    env = make_env(level=level, seed=None)
-
-    # 运行多次，选择最佳
-    print("\n寻找最佳策略...")
-    best_result = None
-    best_money = float("-inf")
-
-    for seed in range(50):
-        result = run_episode(agent, env, seed=seed, deterministic=True)
-        if result["reached"] and result["final_money"] > best_money:
-            best_money = result["final_money"]
-            best_result = result
-
-    if best_result is None:
-        print("警告: 未找到成功到达终点的策略")
-        # 选择回报最高的
-        best_result = max(
-            [run_episode(agent, env, seed=i, deterministic=True) for i in range(20)],
-            key=lambda x: x["return"],
-        )
-
-    # 导出
-    output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    if level == 3:
-        filepath = output_dir / "Result_第三关.xlsx"
-    else:
-        filepath = output_dir / "Result_第四关.xlsx"
-
-    _export_to_xlsx(best_result, str(filepath), level)
-    _analyze_strategy(best_result, env)
-
-    return best_result
 
 
 if __name__ == "__main__":

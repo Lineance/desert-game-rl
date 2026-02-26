@@ -21,7 +21,7 @@ from src.env.config import (
 from src.env.environment import make_env
 from src.models.agent import Agent, create_agent
 from src.models.ppo import PPOTrainer
-from src.pipeline.pretrain import warmup_with_oracle
+from src.pipeline.pretrain import behavior_cloning_with_oracle
 
 
 def _resolve_weather_mode(level: int, requested_mode: Optional[str]) -> str:
@@ -556,7 +556,7 @@ def train(
 
     if oracle_warmup_episodes > 0 and start_episode == 0:
         print("开始Oracle蒸馏预热...")
-        warmup_with_oracle(
+        behavior_cloning_with_oracle(
             agent,
             trainer,
             env,

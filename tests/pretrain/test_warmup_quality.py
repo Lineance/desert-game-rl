@@ -8,7 +8,7 @@ from src.env.environment import make_env
 from src.models.agent import create_agent
 from src.models.belief import WeatherBeliefModel
 from src.models.ppo import PPOTrainer
-from src.pipeline.pretrain import _sanitize_oracle_action, warmup_with_oracle
+from src.pipeline.pretrain import _sanitize_oracle_action, behavior_cloning_with_oracle
 from src.utils.oracle import solve_theoretical_plan
 
 
@@ -61,7 +61,7 @@ def test_warmup_critic_mc_smoke(monkeypatch):
     trainer = PPOTrainer(agent, config=None, device="cpu")
 
     metrics: List[dict] = []
-    warmup_with_oracle(
+    behavior_cloning_with_oracle(
         agent,
         trainer,
         env,
@@ -109,7 +109,7 @@ def test_warmup_behavior_cloning_match_rate(monkeypatch):
     agent = create_agent(env, config=None, device="cpu")
     trainer = PPOTrainer(agent, config=None, device="cpu")
 
-    warmup_with_oracle(
+    behavior_cloning_with_oracle(
         agent,
         trainer,
         env,
@@ -195,7 +195,7 @@ def test_warmup_skips_non_optimal_oracle_solution(monkeypatch):
         },
     )
 
-    summary = warmup_with_oracle(
+    summary = behavior_cloning_with_oracle(
         agent,
         trainer,
         env,

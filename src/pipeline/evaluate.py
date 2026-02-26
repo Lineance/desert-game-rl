@@ -43,7 +43,7 @@ def run_episodes(
     return results
 
 
-def evaluate_multiple_runs(agent_path: str, level: int, num_runs: int = 100, device: str = None):
+def evaluate_multiple_runs(agent_path: str, level: int, num_runs: int = 100, device: str = "cpu"):
     """
     多次运行评估，统计性能
     """

@@ -1,4 +1,5 @@
 import sys
+from argparse import Namespace
 
 import src.pipeline.evaluate as evaluate
 import src.pipeline.rollout as rollout
@@ -35,20 +36,20 @@ def test_evaluate_main_runs_single_episode(monkeypatch, tmp_path):
     monkeypatch.setattr(rollout, "run_episode", fake_run_episode)
     monkeypatch.setattr(rollout, "_export_to_xlsx", fake_export)
     monkeypatch.setattr(rollout, "_analyze_strategy", lambda result, env: None)
-
     monkeypatch.setattr(
-        sys,
-        "argv",
-        [
-            "evaluate.py",
-            "dummy.pt",
-            "--level",
-            "3",
-            "--output",
-            str(tmp_path),
-            "--seed",
-            "7",
-        ],
+        rollout.argparse.ArgumentParser,
+        "parse_args",
+        lambda self: Namespace(
+            agent_path="dummy.pt",
+            level=3,
+            output=str(tmp_path),
+            device="cpu",
+            seed=7,
+            verbose=False,
+            majority_voting=False,
+            majoriry_voting=False,
+            episodes=50,
+        ),
     )
 
     rollout.rollout_main()

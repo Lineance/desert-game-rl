@@ -1,5 +1,3 @@
-from pathlib import Path
-
 import src.pipeline.evaluate as evaluate
 import src.pipeline.rollout as rollout
 
@@ -50,26 +48,13 @@ def test_generate_result_excel_selects_best_reached(monkeypatch, tmp_path):
             "path": [1, 2, 3],
         }
 
-    captured = {}
-
-    def fake_export(result, filepath, level):
-        captured["result"] = result
-        captured["filepath"] = filepath
-        captured["level"] = level
-
     monkeypatch.setattr(rollout.Agent, "load", staticmethod(fake_load))
     monkeypatch.setattr(rollout, "run_episode", fake_run_episode)
-    monkeypatch.setattr(rollout, "_export_to_xlsx", fake_export)
-    monkeypatch.setattr(rollout, "_analyze_strategy", lambda result, env: None)
 
-    result = rollout._generate_result_excel(
-        "dummy.pt", level=3, output_dir=str(tmp_path), device="cpu"
-    )
+    result = rollout.rollout_majority_voting("dummy.pt", level=3, episodes=5, device="cpu")
 
     assert result["reached"] is True
     assert result["final_money"] == 1004.0
-    assert captured["level"] == 3
-    assert Path(captured["filepath"]).name == "Result_第三关.xlsx"
 
 
 def test_generate_result_excel_fallback_when_no_reached(monkeypatch, tmp_path):
@@ -90,12 +75,8 @@ def test_generate_result_excel_fallback_when_no_reached(monkeypatch, tmp_path):
 
     monkeypatch.setattr(rollout.Agent, "load", staticmethod(fake_load))
     monkeypatch.setattr(rollout, "run_episode", fake_run_episode)
-    monkeypatch.setattr(rollout, "_export_to_xlsx", lambda result, filepath, level: None)
-    monkeypatch.setattr(rollout, "_analyze_strategy", lambda result, env: None)
 
-    result = rollout._generate_result_excel(
-        "dummy.pt", level=3, output_dir=str(tmp_path), device="cpu"
-    )
+    result = rollout.rollout_majority_voting("dummy.pt", level=3, device="cpu")
 
     assert result["reached"] is False
     assert result["return"] == 19.0

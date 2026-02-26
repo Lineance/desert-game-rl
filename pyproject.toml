@@ -19,15 +19,11 @@ dependencies = [
 dev = [
   "pytest>=8.0",
   "pytest-cov>=7.0.0",
+  "scalene>=2.1.4",
 ]
 
 [tool.uv]
 package = false
-
-[[tool.uv.index]]
-name = "tsinghua"
-url = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple"
-default = true
 
 [[tool.uv.index]]
 name = "pytorch-cu128"
@@ -64,3 +60,12 @@ addopts = "-v --tb=short -m 'not slow'" # -v: 显示详细测试名，--tb=short
 [tool.coverage.run]
 source = ["src"]          # 统计 src/ 文件夹的覆盖率
 omit = ["*/tests/*"]      # 不统计测试文件本身
+
+# ========== Scalene ==========
+[tool.scalene]
+gpu = true
+memory = true
+reduction-rate = 0.01
+cli = false
+html = true
+outfile = "scalene-report.html"

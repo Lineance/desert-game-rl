@@ -64,7 +64,7 @@ def test_pretrain_resume_passes_start_episode(monkeypatch, tmp_path):
             "value_loss_trend": -10.0,
         }
 
-    monkeypatch.setattr(pretrain_mod, "warmup_with_oracle", _fake_warmup)
+    monkeypatch.setattr(pretrain_mod, "behavior_cloning_with_oracle", _fake_warmup)
 
     checkpoints_dir = tmp_path / "checkpoints"
     results_dir = tmp_path / "results"
@@ -76,7 +76,7 @@ def test_pretrain_resume_passes_start_episode(monkeypatch, tmp_path):
     resume_path = tmp_path / "resume.pt"
     torch.save({"episode": 4}, resume_path)
 
-    pretrain_mod.pretrain_only(
+    pretrain_mod.pretrain_behavior_cloning(
         level=3,
         warmup_episodes=2,
         device="cpu",

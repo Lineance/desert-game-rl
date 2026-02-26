@@ -42,7 +42,7 @@ def test_pretrain_save_interval(monkeypatch, tmp_path):
             "match_rate": 0.5,
         }
 
-    monkeypatch.setattr(pretrain_mod, "warmup_with_oracle", _fake_warmup)
+    monkeypatch.setattr(pretrain_mod, "behavior_cloning_with_oracle", _fake_warmup)
 
     checkpoints_dir = tmp_path / "checkpoints"
     results_dir = tmp_path / "results"
@@ -52,7 +52,7 @@ def test_pretrain_save_interval(monkeypatch, tmp_path):
     monkeypatch.setattr(pretrain_mod, "LOGS_DIR", logs_dir)
 
     output_path = tmp_path / "final_pretrained.pt"
-    pretrain_mod.pretrain_only(
+    pretrain_mod.pretrain_behavior_cloning(
         level=3,
         warmup_episodes=5,
         device="cpu",
@@ -76,7 +76,7 @@ def test_pretrain_save_interval_disabled(monkeypatch, tmp_path):
 
     monkeypatch.setattr(
         pretrain_mod,
-        "warmup_with_oracle",
+        "behavior_cloning_with_oracle",
         lambda *args, **kwargs: {
             "success_rate": 1.0,
             "avg_steps": 7.0,
@@ -97,7 +97,7 @@ def test_pretrain_save_interval_disabled(monkeypatch, tmp_path):
     monkeypatch.setattr(pretrain_mod, "LOGS_DIR", logs_dir)
 
     output_path = tmp_path / "final_pretrained.pt"
-    pretrain_mod.pretrain_only(
+    pretrain_mod.pretrain_behavior_cloning(
         level=3,
         warmup_episodes=1,
         device="cpu",

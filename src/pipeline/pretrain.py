@@ -102,7 +102,7 @@ def evaluate_pretrain_metrics(summary: Dict[str, float]) -> Dict[str, object]:
     }
 
 
-def warmup_with_oracle(
+def behavior_cloning_with_oracle(
     agent: Agent,
     trainer: PPOTrainer,
     env,
@@ -119,21 +119,6 @@ def warmup_with_oracle(
     if episodes <= 0:
         return {
             "episodes": 0.0,
-            "solved": 0.0,
-            "success_rate": 0.0,
-            "avg_steps": 0.0,
-            "avg_mine_per_episode": 0.0,
-            "avg_buy_water": 0.0,
-            "avg_buy_food": 0.0,
-            "avg_value_loss": 0.0,
-            "final_value_loss": 0.0,
-            "value_loss_trend": 0.0,
-            "match_rate": 0.0,
-        }
-    if level not in (3, 35, 4):
-        print("Oracle预热仅支持level 3/35/4，已跳过。")
-        return {
-            "episodes": float(episodes),
             "solved": 0.0,
             "success_rate": 0.0,
             "avg_steps": 0.0,
@@ -439,7 +424,7 @@ def warmup_with_oracle(
     }
 
 
-def pretrain_only(
+def pretrain_behavior_cloning(
     level: int = 3,
     warmup_episodes: int = 200,
     device: Optional[str] = None,
@@ -521,7 +506,7 @@ def pretrain_only(
             print(f"预训练阶段模型保存失败: episode={episode_number}, error={save_error}")
 
     try:
-        summary = warmup_with_oracle(
+        summary = behavior_cloning_with_oracle(
             agent,
             trainer,
             env,
@@ -613,7 +598,7 @@ def pretrain_main() -> None:
     )
     args = parser.parse_args()
 
-    pretrain_only(
+    pretrain_behavior_cloning(
         level=args.level,
         warmup_episodes=args.warmup_episodes,
         device=args.device,
