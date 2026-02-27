@@ -38,7 +38,8 @@ class MineGenerator(nn.Module):
             zero = torch.zeros(state.shape[0], device=state.device)
             return {"log_prob": zero, "entropy": zero}
         dist = self._distribution(state)
-        intensity = torch.clamp(mine_flag.float(), 0.0, 1.0).unsqueeze(-1)
+        eps = 1e-4
+        intensity = torch.clamp(mine_flag.float(), eps, 1.0 - eps).unsqueeze(-1)
         return {
             "log_prob": dist.log_prob(intensity).squeeze(-1),
             "entropy": dist.entropy().squeeze(-1),

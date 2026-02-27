@@ -6,6 +6,13 @@
 - 通过信念模型建模天气不确定性
 - 使用动作掩码保证策略与环境规则一致
 
+训练与调参细节见 [docs/训练与调参.md](docs/%E8%AE%AD%E7%BB%83%E4%B8%8E%E8%B0%83%E5%8F%82.md)。
+
+已完成 pipeline 组件验证（2026-02-27）：
+
+- train / pretrain / evaluate / benchmark / validator 相关测试全通过（54/54）
+- 训练日志已接入多目标动态加权指标：`alpha_mean`、`survival_value_loss`、`fund_value_loss`
+
 ---
 
 ## 项目结构
@@ -24,14 +31,21 @@ task2/
 │   │   └── environment.py # POMDP环境与规则执行
 │   ├── models/
 │   │   ├── belief.py      # 天气信念模型与特征提取
-│   │   ├── agent.py       # 编码策略/价值网络
-│   │   └── ppo.py         # 唯一PPO训练实现（采样+更新）
+│   │   ├── agent.py       # 主入口（组装编码器/策略/双价值）
+│   │   ├── ppo.py         # PPO训练实现（采样+更新）
+│   │   ├── encoders/      # ResourceEncoder/ManualGNN/GateFusion
+│   │   ├── policy/        # MoveSelector/LocationActionSelector/Generators
+│   │   └── critic/        # SurvivalCritic/FundCritic/TargetNetwork
 │   ├── pipeline/
 │   │   ├── train.py       # 训练核心逻辑
 │   │   ├── pretrain.py    # 评估与导出核心逻辑
 │   │   ├── rollout.py     # 单次运行求解
 │   │   ├── evaluate.py    # 多次运行详细分析
 │   │   └── benchmark.py   # 评价基准
+│   └── utils/
+│       ├── graph_utils.py    # 图静态特征与最短路
+│       ├── mask_utils.py     # 动作掩码与地点类型辅助
+│       └── training_utils.py # GAE/梯度裁剪/动态alpha
 │
 └── README.md
 ```
@@ -42,13 +56,16 @@ task2/
 
 - 观测：19维
   - 状态6维 + 天气one-hot 3维 + 地点类型4维 + 信念特征6维
-- 模型：`HybridRNNAgent`（当前为 MLP 编码，不是 LSTM 主体）
-  - `state_encoder` + `belief_encoder` 拼接后送入 Actor/Critic
-- PPO：仅在 `ppo.py` 中实现
-  - 采样与更新都使用相同 `valid_actions` 掩码
-  - 包含 GAE、PPO clip、value clip、entropy bonus、梯度裁剪
+- 模型：模块化分层架构（`src/models`）
+  - 编码层：`ResourceEncoder` + `ManualGNN` + `GateFusion`
+  - 策略层：`MoveSelector`（阶段1）+ `LocationActionSelector`（阶段2）+ 生成器
+  - 价值层：`SurvivalCritic` + `FundCritic` + `TargetNetwork`
+- PPO：在 `ppo.py` 实现
+  - 使用 `valid_actions` 约束动作合法性
+  - 包含 GAE、PPO clip、value clip、entropy、梯度裁剪、KL早停
+  - 已接入动态加权：`TotalValueLoss = alpha * SurvivalLoss + (1-alpha) * FundLoss`
 
-> 详细流程见 `ARCHITECTURE.md`。
+> 详细设计见 `docs/模型架构.md`。
 
 ---
 
@@ -100,6 +117,9 @@ uv run python scripts/train.py --level 4 --episodes 5000
 
 # 指定设备
 uv run python scripts/train.py --level 3 --episodes 2000 --device cuda
+
+# 启用Stage2/Stage3自动编排（Stage1仍手动分离）
+uv run python scripts/train.py --level 3 --episodes 3000 --auto-stages
 ```
 
 ### 参数

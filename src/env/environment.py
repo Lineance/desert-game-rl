@@ -41,7 +41,7 @@ class State:
 
 
 class DesertCrossingEnv:
-    """沙漠穿越环境 - 修复版"""
+    """沙漠穿越环境"""
 
     def __init__(self, config=None, weather_mode="balanced", seed=None):
         if config is None:
@@ -284,7 +284,7 @@ class DesertCrossingEnv:
         if is_moving:
             # 先检查沙暴，再移动
             if s.weather_today == Weather.SANDSTORM:
-                reward -= 50.0
+                reward -= 10.0
                 is_moving = False
             elif move_target in self.neighbors[s.position]:
                 s.position = move_target
@@ -343,9 +343,9 @@ class DesertCrossingEnv:
         # 挖矿收益
         if mining:
             s.money += self.config.MINE_INCOME
-            reward += max(3.0, self.config.MINE_INCOME / 50.0)
-            if "挖矿" not in s.action_history:
-                reward += 5.0
+            # reward += max(3.0, self.config.MINE_INCOME / 50.0)
+            # if "挖矿" not in s.action_history:
+            #     reward += 5.0
 
         # ========== 4. 购买处理（第1天及以后，仅村庄）==========
         # 第0天的购买已在前面处理，起点不能重复购买
@@ -354,8 +354,8 @@ class DesertCrossingEnv:
             if at_village:
                 cost = self._compute_purchase_cost(buy_water, buy_food, False)
                 if cost <= s.money:
-                    if "购买" not in s.action_history:
-                        reward += 5.0
+                    # if "购买" not in s.action_history:
+                    #     reward += 5.0
                     new_weight = (s.water + buy_water) * self.config.WATER_WEIGHT + (
                         s.food + buy_food
                     ) * self.config.FOOD_WEIGHT
@@ -366,10 +366,10 @@ class DesertCrossingEnv:
                         executed_buy_water = int(buy_water)
                         executed_buy_food = int(buy_food)
                         action_name += "+购买" if action_name != "停留" else "购买"
-                        reward += 1.0
+                        # reward += 1.0
 
-        if ((not do_mine) or (not (buy_water > 0 or buy_food > 0))) and (not is_moving):
-            reward -= 1
+        # if ((not do_mine) or (not (buy_water > 0 or buy_food > 0))) and (not is_moving):
+        #     reward -= 1
 
         # ========== 5. 更新记录 ==========
         s.path_history.append(s.position)

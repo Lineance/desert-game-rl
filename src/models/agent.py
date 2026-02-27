@@ -49,7 +49,7 @@ class ActorNetwork(nn.Module):
         state: torch.Tensor,
         node_embeddings: torch.Tensor,
         day_norm: torch.Tensor,
-        valid_actions: Dict,
+        valid_actions: Optional[Dict],
     ) -> Dict[str, torch.Tensor]:
         valid = normalize_valid_actions(valid_actions)
         move_out = self.move_selector(state, node_embeddings, valid)
@@ -83,7 +83,7 @@ class ActorNetwork(nn.Module):
         state: torch.Tensor,
         node_embeddings: torch.Tensor,
         day_norm: torch.Tensor,
-        valid_actions: Dict,
+        valid_actions: Optional[Dict],
     ):
         valid = normalize_valid_actions(valid_actions)
         move_sample = self.move_selector.sample(state, node_embeddings, valid)
@@ -112,7 +112,7 @@ class ActorNetwork(nn.Module):
         node_embeddings: torch.Tensor,
         day_norm: torch.Tensor,
         actions: Dict[str, torch.Tensor],
-        valid_actions: Dict,
+        valid_actions: Optional[Dict],
     ):
         valid = normalize_valid_actions(valid_actions)
         move_out = self.move_selector(state, node_embeddings, valid)
@@ -322,6 +322,18 @@ class Agent(nn.Module):
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         state, node_embeddings, day_norm = self.encode_observation_full(obs_tensor)
         return self.actor.evaluate_actions(state, node_embeddings, day_norm, action, valid_actions)
+
+    def set_stage_trainability(self, stage_name: str, freeze_fund_critic: bool) -> None:
+        _ = stage_name
+        for param in self.fund_critic.parameters():
+            param.requires_grad = not freeze_fund_critic
+
+    def get_trainability_snapshot(self) -> Dict[str, bool]:
+        fund_flags = [bool(p.requires_grad) for p in self.fund_critic.parameters()]
+        return {
+            "fund_critic_trainable": bool(all(fund_flags)) if fund_flags else False,
+            "fund_critic_frozen": bool(not any(fund_flags)) if fund_flags else True,
+        }
 
     def update_targets(self, tau: float = 0.995) -> None:
         self.survival_target.soft_update(tau=tau)

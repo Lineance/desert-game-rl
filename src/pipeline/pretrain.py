@@ -254,15 +254,26 @@ def behavior_cloning_with_oracle(
             episode_total_actions += 1
 
             obs_tensor = torch.FloatTensor(obs).unsqueeze(0).to(device)
-            state = agent.encode_observation(obs_tensor)
+            state, node_embeddings, day_norm = agent.encode_observation_full(obs_tensor)
             action_tensor = {
                 "move": torch.LongTensor([action["move"]]).to(device),
                 "mine": torch.FloatTensor([action["mine"]]).to(device),
                 "buy_water": torch.FloatTensor([action["buy_water"]]).to(device),
                 "buy_food": torch.FloatTensor([action["buy_food"]]).to(device),
             }
-            log_prob, _ = agent.actor.evaluate_actions(state, action_tensor, valid_actions)
-            value = agent.critic(state).squeeze(-1)
+            log_prob, _ = agent.actor.evaluate_actions(
+                state,
+                node_embeddings,
+                day_norm,
+                action_tensor,
+                valid_actions,
+            )
+            value = 0.5 * (agent.survival_critic(state) + agent.fund_critic(state))
+            value = value.squeeze(-1)
+            if not torch.isfinite(log_prob).all():
+                log_prob = torch.zeros_like(log_prob)
+            if not torch.isfinite(value).all():
+                value = torch.zeros_like(value)
             log_probs.append(log_prob.squeeze(0))
             values.append(value.squeeze(0))
 
@@ -299,6 +310,17 @@ def behavior_cloning_with_oracle(
         values_tensor = torch.stack(values)
         value_loss = F.mse_loss(values_tensor, returns_tensor)
         episode_loss = policy_loss + value_weight * value_loss
+        if not torch.isfinite(episode_loss):
+            if ep % log_interval == 0:
+                print(
+                    "Oracle预热: "
+                    f"episode={ep}, 非有限loss(policy={float(policy_loss.item()):.4f}, "
+                    f"value={float(value_loss.item()):.4f})，跳过本次参数更新"
+                )
+            if on_episode_end is not None:
+                episode_record["steps"] = float(episode_steps)
+                on_episode_end(ep, dict(episode_record))
+            continue
         value_losses.append(float(value_loss.item()))
 
         trainer.optimizer.zero_grad()

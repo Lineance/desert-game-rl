@@ -2,6 +2,7 @@ import argparse
 import csv
 import random
 from collections import deque
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, TextIO, Tuple
@@ -22,6 +23,69 @@ from src.env.environment import make_env
 from src.models.agent import Agent, create_agent
 from src.models.ppo import PPOTrainer
 from src.pipeline.pretrain import behavior_cloning_with_oracle
+
+
+@dataclass
+class StageRuntimeState:
+    stage_name: str
+    stage2_episodes_done: int = 0
+    stage3_episodes_done: int = 0
+    stage3_start_episode: Optional[int] = None
+
+
+def _compute_stage3_alpha(
+    stage3_episodes_done: int,
+    alpha_start: float,
+    alpha_end: float,
+    decay_episodes: int,
+) -> float:
+    if decay_episodes <= 0:
+        return float(alpha_end)
+    progress = min(1.0, stage3_episodes_done / max(1, decay_episodes))
+    return float(alpha_start + (alpha_end - alpha_start) * progress)
+
+
+def _should_switch_to_stage3(
+    stage2_episodes_done: int,
+    stage2_min_episodes: int,
+    rolling_success_rate: float,
+    success_threshold: float,
+    entropy: Optional[float],
+    entropy_threshold: float,
+) -> bool:
+    if stage2_episodes_done < stage2_min_episodes:
+        return False
+    if entropy is None:
+        return False
+    return bool(
+        rolling_success_rate >= success_threshold and float(entropy) <= float(entropy_threshold)
+    )
+
+
+def _resolve_stage_runtime(
+    auto_stages: bool,
+    resume_stage_policy: str,
+    checkpoint: Optional[Dict[str, Any]],
+) -> StageRuntimeState:
+    if not auto_stages:
+        return StageRuntimeState(stage_name="default")
+    if (
+        resume_stage_policy == "continue"
+        and isinstance(checkpoint, dict)
+        and isinstance(checkpoint.get("stage_context"), dict)
+    ):
+        ctx = checkpoint["stage_context"]
+        return StageRuntimeState(
+            stage_name=str(ctx.get("stage_name", "stage2")),
+            stage2_episodes_done=int(ctx.get("stage2_episodes_done", 0)),
+            stage3_episodes_done=int(ctx.get("stage3_episodes_done", 0)),
+            stage3_start_episode=(
+                int(ctx["stage3_start_episode"])
+                if ctx.get("stage3_start_episode") is not None
+                else None
+            ),
+        )
+    return StageRuntimeState(stage_name="stage2")
 
 
 def _resolve_weather_mode(level: int, requested_mode: Optional[str]) -> str:
@@ -94,6 +158,7 @@ def _save_training_state(
     best_net_profit: float,
     stats: Optional[Dict[str, float]],
     epsilon: float,
+    stage_context: Optional[Dict[str, Any]] = None,
 ) -> None:
     scheduler = getattr(trainer, "scheduler", None) or getattr(trainer, "lr_scheduler", None)
     scheduler_state = scheduler.state_dict() if scheduler is not None else None
@@ -118,6 +183,7 @@ def _save_training_state(
             "best_net_profit": float(best_net_profit),
             "epsilon": float(epsilon),
             "stats": stats,
+            "stage_context": stage_context,
             "config": agent.config,
             "obs_dim": agent.obs_dim,
             "num_locations": agent.num_locations,
@@ -371,6 +437,7 @@ def _safe_save_latest(
     best_net_profit: float,
     stats: Optional[Dict[str, float]],
     epsilon: float,
+    stage_context: Optional[Dict[str, Any]],
     reason: str,
 ) -> None:
     try:
@@ -383,6 +450,7 @@ def _safe_save_latest(
             best_net_profit,
             stats,
             epsilon,
+            stage_context,
         )
         print(f"已自动保存latest断点({reason}): episode={episode}, epsilon={epsilon:.3f}")
     except Exception as save_error:
@@ -410,6 +478,9 @@ def _init_structured_loggers(
             "rolling_return",
             "rolling_net_profit",
             "rolling_success_rate",
+            "stage_name",
+            "alpha_override",
+            "stage_transition",
             "policy_loss",
             "value_loss",
             "survival_value_loss",
@@ -445,6 +516,9 @@ def _log_structured_metrics(
     rolling_return: float,
     rolling_net_profit: float,
     rolling_success_rate: float,
+    stage_name: str,
+    alpha_override: Optional[float],
+    stage_transition: str,
     stats: Optional[Dict[str, float]],
 ) -> None:
     net_profit = float(episode_info.get("net_profit", 0.0))
@@ -459,6 +533,9 @@ def _log_structured_metrics(
         "rolling_return": float(rolling_return),
         "rolling_net_profit": float(rolling_net_profit),
         "rolling_success_rate": float(rolling_success_rate),
+        "stage_name": stage_name,
+        "alpha_override": float(alpha_override) if alpha_override is not None else float("nan"),
+        "stage_transition": stage_transition,
         "policy_loss": float(stats.get("policy_loss", float("nan")))
         if stats is not None
         else float("nan"),
@@ -490,6 +567,15 @@ def _log_structured_metrics(
         tb_writer.add_scalar("train/success_rate", row["rolling_success_rate"], episode)
         tb_writer.add_scalar("train/epsilon", row["epsilon"], episode)
         tb_writer.add_scalar("train/rolling_net_profit", row["rolling_net_profit"], episode)
+        stage_id_map = {"default": 0.0, "stage2": 2.0, "stage3": 3.0}
+        tb_writer.add_scalar("train/stage_id", stage_id_map.get(stage_name, -1.0), episode)
+        tb_writer.add_scalar(
+            "train/stage_transition",
+            1.0 if stage_transition else 0.0,
+            episode,
+        )
+        if alpha_override is not None:
+            tb_writer.add_scalar("train/alpha_override", float(alpha_override), episode)
         if stats is not None:
             tb_writer.add_scalar("train/policy_loss", row["policy_loss"], episode)
             tb_writer.add_scalar("train/value_loss", row["value_loss"], episode)
@@ -512,6 +598,15 @@ def train(
     weather_mode: Optional[str] = None,
     oracle_warmup_episodes: int = 0,
     oracle_time_limit: int = 20,
+    auto_stages: bool = False,
+    stage2_min_episodes: int = 200,
+    stage2_success_threshold: float = 0.8,
+    stage2_entropy_threshold: float = 0.2,
+    stage2_alpha: float = 0.9,
+    stage3_alpha_start: float = 0.9,
+    stage3_alpha_end: float = 0.3,
+    stage3_alpha_decay_episodes: int = 1000,
+    resume_stage_policy: str = "continue",
     eval_interval: int = 100,
     eval_episodes: int = 50,
     path_entropy_episodes: int = 100,
@@ -577,6 +672,16 @@ def train(
         )
         stats = checkpoint.get("stats")
 
+    if resume_stage_policy not in {"continue", "recompute"}:
+        raise ValueError("resume_stage_policy must be one of {'continue', 'recompute'}")
+
+    stage_runtime = _resolve_stage_runtime(auto_stages, resume_stage_policy, checkpoint)
+    if auto_stages:
+        freeze_fund_critic = stage_runtime.stage_name == "stage2"
+        agent.set_stage_trainability(
+            stage_runtime.stage_name, freeze_fund_critic=freeze_fund_critic
+        )
+
     if oracle_warmup_episodes > 0 and start_episode == 0:
         print("开始Oracle蒸馏预热...")
         behavior_cloning_with_oracle(
@@ -609,6 +714,15 @@ def train(
     available_modes = ", ".join(sorted(env.config.WEATHER_MODES.keys()))
 
     print(f"天气模式: {selected_mode} (可选: {available_modes})")
+    if auto_stages:
+        print(
+            "阶段编排: "
+            f"stage={stage_runtime.stage_name}, "
+            f"min_ep={stage2_min_episodes}, "
+            f"succ_th={stage2_success_threshold:.2f}, "
+            f"ent_th={stage2_entropy_threshold:.2f}, "
+            f"resume_policy={resume_stage_policy}"
+        )
     print("=" * 60)
 
     csv_file, csv_writer, tb_writer, csv_path, tb_dir = _init_structured_loggers(level)
@@ -699,8 +813,28 @@ def train(
             #     first_return = returns[0] if returns else "N/A"
             #     print(f"实际回报(GAE): {first_return}")
 
+            alpha_override: Optional[float] = None
+            stage_transition = ""
+            stage_name_for_log = stage_runtime.stage_name
+
+            if auto_stages:
+                if stage_runtime.stage_name == "stage2":
+                    alpha_override = float(stage2_alpha)
+                elif stage_runtime.stage_name == "stage3":
+                    alpha_override = _compute_stage3_alpha(
+                        stage_runtime.stage3_episodes_done,
+                        stage3_alpha_start,
+                        stage3_alpha_end,
+                        stage3_alpha_decay_episodes,
+                    )
+
             if rollout_buffer.rewards:
-                stats = trainer.update(rollout_buffer, last_value)
+                stats = trainer.update(
+                    rollout_buffer,
+                    last_value,
+                    alpha_override=alpha_override,
+                    stage_name=stage_runtime.stage_name,
+                )
 
             final_money = float(episode_info.get("final_money", 0.0))
             episode_info["net_profit"] = final_money - float(env.config.INIT_MONEY)
@@ -722,6 +856,24 @@ def train(
             rolling_return = sum(recent_returns) / window_n
             rolling_net_profit = sum(recent_net_profit) / window_n
 
+            if auto_stages and stage_runtime.stage_name == "stage2":
+                stage_runtime.stage2_episodes_done += 1
+                entropy_value = float(stats["entropy"]) if stats is not None else None
+                if _should_switch_to_stage3(
+                    stage2_episodes_done=stage_runtime.stage2_episodes_done,
+                    stage2_min_episodes=stage2_min_episodes,
+                    rolling_success_rate=rolling_success_rate,
+                    success_threshold=stage2_success_threshold,
+                    entropy=entropy_value,
+                    entropy_threshold=stage2_entropy_threshold,
+                ):
+                    stage_runtime.stage_name = "stage3"
+                    stage_runtime.stage3_start_episode = episode + 1
+                    stage_transition = "stage2_to_stage3"
+                    agent.set_stage_trainability("stage3", freeze_fund_critic=False)
+            elif auto_stages and stage_runtime.stage_name == "stage3":
+                stage_runtime.stage3_episodes_done += 1
+
             _log_structured_metrics(
                 csv_writer,
                 tb_writer,
@@ -731,6 +883,9 @@ def train(
                 rolling_return,
                 rolling_net_profit,
                 rolling_success_rate,
+                stage_name_for_log,
+                alpha_override,
+                stage_transition,
                 stats,
             )
             csv_file.flush()
@@ -769,6 +924,12 @@ def train(
                     f"  本回合: 奖励={episode_info['return']:.1f}, "
                     f"到达={episode_info['reached']}, 步数={episode_info['length']}, 天数={episode_info['final_day']}, "
                     f"资金={episode_info['final_money']:.1f}, 净收益={episode_info.get('net_profit', 0.0):.1f}"
+                )
+                print(
+                    "  阶段: "
+                    f"{stage_name_for_log}, "
+                    f"alpha_override={alpha_override if alpha_override is not None else 'dynamic'}, "
+                    f"transition={stage_transition or 'none'}"
                 )
                 if stats is not None:
                     print(
@@ -873,6 +1034,12 @@ def train(
                     best_net_profit,
                     stats,
                     epsilon,
+                    {
+                        "stage_name": stage_runtime.stage_name,
+                        "stage2_episodes_done": stage_runtime.stage2_episodes_done,
+                        "stage3_episodes_done": stage_runtime.stage3_episodes_done,
+                        "stage3_start_episode": stage_runtime.stage3_start_episode,
+                    },
                 )
 
             if episode % 500 == 0 and episode > 0:
@@ -893,6 +1060,12 @@ def train(
             best_net_profit,
             stats,
             last_epsilon,
+            {
+                "stage_name": stage_runtime.stage_name,
+                "stage2_episodes_done": stage_runtime.stage2_episodes_done,
+                "stage3_episodes_done": stage_runtime.stage3_episodes_done,
+                "stage3_start_episode": stage_runtime.stage3_start_episode,
+            },
             reason="keyboard_interrupt",
         )
         if tb_writer is not None:
@@ -911,6 +1084,12 @@ def train(
             best_net_profit,
             stats,
             last_epsilon,
+            {
+                "stage_name": stage_runtime.stage_name,
+                "stage2_episodes_done": stage_runtime.stage2_episodes_done,
+                "stage3_episodes_done": stage_runtime.stage3_episodes_done,
+                "stage3_start_episode": stage_runtime.stage3_start_episode,
+            },
             reason="exception",
         )
         if tb_writer is not None:
@@ -928,6 +1107,12 @@ def train(
         best_net_profit,
         stats,
         last_epsilon,
+        {
+            "stage_name": stage_runtime.stage_name,
+            "stage2_episodes_done": stage_runtime.stage2_episodes_done,
+            "stage3_episodes_done": stage_runtime.stage3_episodes_done,
+            "stage3_start_episode": stage_runtime.stage3_start_episode,
+        },
     )
     print(f"\n训练完成！最佳奖励: {best_return:.1f}")
     if tb_writer is not None:
@@ -973,6 +1158,60 @@ def train_main() -> None:
         help="Oracle求解时间上限（秒）",
     )
     parser.add_argument(
+        "--auto-stages",
+        action="store_true",
+        help="启用Stage2/Stage3自动化编排（Stage1仍手动分离）",
+    )
+    parser.add_argument(
+        "--stage2-min-episodes",
+        type=int,
+        default=200,
+        help="Stage2最少训练回合数，达到后才允许阈值切换Stage3",
+    )
+    parser.add_argument(
+        "--stage2-success-threshold",
+        type=float,
+        default=0.8,
+        help="Stage2切换Stage3所需滚动成功率阈值",
+    )
+    parser.add_argument(
+        "--stage2-entropy-threshold",
+        type=float,
+        default=0.2,
+        help="Stage2切换Stage3所需熵阈值（需低于该值）",
+    )
+    parser.add_argument(
+        "--stage2-alpha",
+        type=float,
+        default=0.9,
+        help="Stage2固定alpha",
+    )
+    parser.add_argument(
+        "--stage3-alpha-start",
+        type=float,
+        default=0.9,
+        help="Stage3退火起始alpha",
+    )
+    parser.add_argument(
+        "--stage3-alpha-end",
+        type=float,
+        default=0.3,
+        help="Stage3退火结束alpha",
+    )
+    parser.add_argument(
+        "--stage3-alpha-decay-episodes",
+        type=int,
+        default=1000,
+        help="Stage3 alpha退火回合数",
+    )
+    parser.add_argument(
+        "--resume-stage-policy",
+        type=str,
+        default="continue",
+        choices=["continue", "recompute"],
+        help="续训时阶段策略：continue沿用checkpoint，recompute重置为Stage2",
+    )
+    parser.add_argument(
         "--eval-interval",
         type=int,
         default=100,
@@ -1003,6 +1242,15 @@ def train_main() -> None:
         weather_mode=args.weather_mode,
         oracle_warmup_episodes=args.oracle_warmup_episodes,
         oracle_time_limit=args.oracle_time_limit,
+        auto_stages=args.auto_stages,
+        stage2_min_episodes=args.stage2_min_episodes,
+        stage2_success_threshold=args.stage2_success_threshold,
+        stage2_entropy_threshold=args.stage2_entropy_threshold,
+        stage2_alpha=args.stage2_alpha,
+        stage3_alpha_start=args.stage3_alpha_start,
+        stage3_alpha_end=args.stage3_alpha_end,
+        stage3_alpha_decay_episodes=args.stage3_alpha_decay_episodes,
+        resume_stage_policy=args.resume_stage_policy,
         eval_interval=args.eval_interval,
         eval_episodes=args.eval_episodes,
         path_entropy_episodes=args.path_entropy_episodes,

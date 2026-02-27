@@ -162,7 +162,13 @@ class PPOTrainer:
             "clip_fraction": [],
         }
 
-    def update(self, rollout_buffer: RolloutBuffer, last_value: float) -> Dict[str, float]:
+    def update(
+        self,
+        rollout_buffer: RolloutBuffer,
+        last_value: float,
+        alpha_override: Optional[float] = None,
+        stage_name: str = "stage3",
+    ) -> Dict[str, float]:
         """
         使用收集的数据更新策略
 
@@ -284,7 +290,10 @@ class PPOTrainer:
             water_ratio = torch.clamp(obs_tensor[:, 2], 0.0, 1.0)
             food_ratio = torch.clamp(obs_tensor[:, 3], 0.0, 1.0)
             dist_to_end_ratio = torch.clamp(obs_tensor[:, 5], 0.0, 1.0)
-            alpha = dynamic_alpha(water_ratio, food_ratio, dist_to_end_ratio)
+            if alpha_override is not None:
+                alpha = torch.full_like(water_ratio, float(alpha_override))
+            else:
+                alpha = dynamic_alpha(water_ratio, food_ratio, dist_to_end_ratio)
 
             # Survival Critic 损失（回合成败监督）
             survival_target = torch.full_like(
@@ -361,6 +370,7 @@ class PPOTrainer:
             "survival_value_loss": total_survival_value_loss / n,
             "fund_value_loss": total_fund_value_loss / n,
             "alpha_mean": total_alpha_mean / n,
+            "alpha_source": 0.0 if alpha_override is None else 1.0,
             "entropy": total_entropy / n,
             "approx_kl": total_kl / n,
             "clip_fraction": total_clip_fraction / n,
