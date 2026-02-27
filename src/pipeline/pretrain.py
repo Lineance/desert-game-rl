@@ -22,7 +22,7 @@ from src.env.environment import make_env
 from src.models.agent import Agent, create_agent
 from src.models.ppo import PPOTrainer
 from src.utils.bc_dataset import load_behavior_cloning_dataset_index
-from src.utils.oracle import solve_theoretical_plan
+from src.utils.oracle import solve_theoretical_batch, solve_theoretical_plan
 
 
 def evaluate_pretrain_metrics(summary: Dict[str, float]) -> Dict[str, object]:
@@ -118,6 +118,9 @@ def behavior_cloning_with_oracle(
     metrics: Optional[List[Dict[str, float]]] = None,
     on_episode_end: Optional[Callable[[int, Dict[str, float]], None]] = None,
     oracle_dataset_path: Optional[str] = None,
+    oracle_parallel_workers: int = 1,
+    oracle_solver_threads: Optional[int] = None,
+    warmup_batch_episodes: int = 1,
 ) -> Dict[str, float]:
     if episodes <= 0:
         return {
@@ -133,6 +136,8 @@ def behavior_cloning_with_oracle(
             "value_loss_trend": 0.0,
             "match_rate": 0.0,
         }
+
+    warmup_batch_episodes = max(1, int(warmup_batch_episodes))
 
     agent.train()
     total_loss = 0.0
@@ -156,8 +161,53 @@ def behavior_cloning_with_oracle(
         if oracle_dataset_path is not None
         else None
     )
-
     weather_mode = str(getattr(env, "weather_mode", "balanced"))
+    prefetched_oracle_results: Dict[int, Dict[str, Any]] = {}
+    pending_losses: List[torch.Tensor] = []
+    pending_count = 0
+    optimizer_steps = 0
+
+    def _flush_pending_losses() -> None:
+        nonlocal pending_count, optimizer_steps
+        if not pending_losses:
+            return
+        batch_loss = torch.stack(pending_losses).mean()
+        if not torch.isfinite(batch_loss):
+            pending_losses.clear()
+            pending_count = 0
+            return
+        trainer.optimizer.zero_grad()
+        batch_loss.backward()
+        torch.nn.utils.clip_grad_norm_(agent.parameters(), trainer.config.MAX_GRAD_NORM)
+        trainer.optimizer.step()
+        pending_losses.clear()
+        pending_count = 0
+        optimizer_steps += 1
+
+    if dataset_index is None and oracle_parallel_workers > 1:
+        prefetch_env = make_env(level=level, weather_mode=weather_mode, seed=None)
+        weather_seqs: List[List[int]] = []
+        episodes_to_solve: List[int] = []
+        for ep in range(start_episode, start_episode + episodes):
+            prefetch_env.reset(seed=ep)
+            if prefetch_env.state is None:
+                continue
+            weather_seqs.append(list(prefetch_env.state.weather_future))
+            episodes_to_solve.append(ep)
+
+        if weather_seqs:
+            prefetch_results = solve_theoretical_batch(
+                level=level,
+                weather_seqs=weather_seqs,
+                time_limit=time_limit,
+                return_plan=True,
+                max_workers=oracle_parallel_workers,
+                threads=oracle_solver_threads,
+            )
+            prefetched_oracle_results = {
+                episode: result
+                for episode, result in zip(episodes_to_solve, prefetch_results, strict=True)
+            }
 
     for ep in range(start_episode, start_episode + episodes):
         should_eval_student = (log_interval > 0) and (ep % log_interval == 0)
@@ -220,7 +270,22 @@ def behavior_cloning_with_oracle(
                     used_dataset = True
 
         if not used_dataset:
-            oracle = solve_theoretical_plan(level, weather_seq, time_limit=time_limit)
+            if prefetched_oracle_results:
+                oracle = prefetched_oracle_results.get(ep, {})
+            else:
+                if oracle_solver_threads is None:
+                    oracle = solve_theoretical_plan(
+                        level,
+                        weather_seq,
+                        time_limit=time_limit,
+                    )
+                else:
+                    oracle = solve_theoretical_plan(
+                        level,
+                        weather_seq,
+                        time_limit=time_limit,
+                        threads=oracle_solver_threads,
+                    )
             oracle_status = str(oracle.get("status", "Unknown"))
             oracle_reached = bool(oracle.get("reached", False))
             plan = oracle.get("plan", [])
@@ -349,10 +414,10 @@ def behavior_cloning_with_oracle(
             continue
         value_losses.append(float(value_loss.item()))
 
-        trainer.optimizer.zero_grad()
-        episode_loss.backward()
-        torch.nn.utils.clip_grad_norm_(agent.parameters(), trainer.config.MAX_GRAD_NORM)
-        trainer.optimizer.step()
+        pending_losses.append(episode_loss)
+        pending_count += 1
+        if pending_count >= warmup_batch_episodes:
+            _flush_pending_losses()
 
         total_loss += float(episode_loss.item())
         total_steps += episode_steps
@@ -425,6 +490,8 @@ def behavior_cloning_with_oracle(
         if on_episode_end is not None:
             on_episode_end(ep, dict(episode_record))
 
+    _flush_pending_losses()
+
     avg_loss = total_loss / max(1, solved)
     avg_steps = total_steps / max(1, solved)
     avg_mine = total_mine_days / max(1, solved)
@@ -446,6 +513,7 @@ def behavior_cloning_with_oracle(
         f"success_rate={success_rate:.2%}, avg_steps={avg_steps:.1f}, "
         f"avg_mine={avg_mine:.2f}, avg_buy_w={avg_buy_water:.1f}, "
         f"avg_buy_f={avg_buy_food:.1f}, match_rate={match_rate:.2%}, avg_loss={avg_loss:.4f}; "
+        f"optimizer_steps={optimizer_steps}, warmup_batch={warmup_batch_episodes}; "
         f"student(success_rate={student_success_rate:.2%}, avg_steps={student_avg_steps:.1f}, "
         f"avg_mine={student_avg_mine:.2f}, avg_buy_w={student_avg_buy_water:.1f}, "
         f"avg_buy_f={student_avg_buy_food:.1f})"
@@ -469,6 +537,8 @@ def behavior_cloning_with_oracle(
         "student_avg_mine_per_episode": float(student_avg_mine),
         "student_avg_buy_water": float(student_avg_buy_water),
         "student_avg_buy_food": float(student_avg_buy_food),
+        "optimizer_steps": float(optimizer_steps),
+        "warmup_batch_episodes": float(warmup_batch_episodes),
     }
 
 
@@ -482,6 +552,9 @@ def pretrain_behavior_cloning(
     save_interval: int = 0,
     resume: Optional[str] = None,
     oracle_dataset_path: Optional[str] = None,
+    oracle_parallel_workers: int = 1,
+    oracle_solver_threads: Optional[int] = None,
+    warmup_batch_episodes: int = 1,
 ) -> None:
     """仅执行Oracle蒸馏预热并保存模型。"""
     if device is None:
@@ -524,7 +597,8 @@ def pretrain_behavior_cloning(
     print("仅预训练模式: Oracle蒸馏预热")
     print(
         f"level={level}, weather_mode={selected_mode}, "
-        f"warmup_episodes={warmup_episodes}, device={device}"
+        f"warmup_episodes={warmup_episodes}, device={device}, "
+        f"warmup_batch_episodes={warmup_batch_episodes}"
     )
     if resume_path is not None:
         print(f"resume_from={resume_path}, start_episode={resume_start_episode}")
@@ -569,6 +643,9 @@ def pretrain_behavior_cloning(
             metrics=warmup_metrics,
             on_episode_end=_save_interval_checkpoint,
             oracle_dataset_path=oracle_dataset_path,
+            oracle_parallel_workers=oracle_parallel_workers,
+            oracle_solver_threads=oracle_solver_threads,
+            warmup_batch_episodes=warmup_batch_episodes,
         )
 
         _write_pretrain_metrics(csv_writer, tb_writer, warmup_metrics, summary)
@@ -584,15 +661,20 @@ def pretrain_behavior_cloning(
         print(f"TensorBoard日志目录: {tb_dir}")
 
     report = evaluate_pretrain_metrics(summary)
+    report_checks = report.get("checks", [])
     print("=" * 60)
     print("预训练指标检测（4项阈值）")
-    for item in report["checks"]:
-        print(f"[{item['status']}] {item['name']}: {item['note']}")
+    if isinstance(report_checks, list):
+        for item in report_checks:
+            if isinstance(item, dict):
+                print(
+                    f"[{item.get('status', 'UNKNOWN')}] {item.get('name', '-')}: {item.get('note', '-')}"
+                )
 
-    if report["redline"]:
+    if bool(report.get("redline", False)):
         print("[REDLINE] avg_steps≈4 且 solved=100% 但无挖矿、价值损失恶化、匹配率过低。")
 
-    if report["overall_pass"]:
+    if bool(report.get("overall_pass", False)):
         print("预训练指标检测结果: PASS")
     else:
         print("预训练指标检测结果: FAIL/WARN（建议继续Warmup并检查Oracle计划质量）")
@@ -654,6 +736,24 @@ def pretrain_main() -> None:
         default=None,
         help="可复用BC数据集文件路径（命中则优先使用，未命中回退在线Oracle）",
     )
+    parser.add_argument(
+        "--oracle-parallel-workers",
+        type=int,
+        default=1,
+        help="在线Oracle并行求解worker数（<=1表示串行）",
+    )
+    parser.add_argument(
+        "--oracle-solver-threads",
+        type=int,
+        default=None,
+        help="单个Oracle求解器线程数",
+    )
+    parser.add_argument(
+        "--warmup-batch-episodes",
+        type=int,
+        default=1,
+        help="预热阶段按多少个episode累计一次反向传播（>1可提升GPU利用率）",
+    )
     args = parser.parse_args()
 
     pretrain_behavior_cloning(
@@ -666,6 +766,9 @@ def pretrain_main() -> None:
         save_interval=args.save_interval,
         resume=args.resume,
         oracle_dataset_path=args.oracle_dataset_path,
+        oracle_parallel_workers=args.oracle_parallel_workers,
+        oracle_solver_threads=args.oracle_solver_threads,
+        warmup_batch_episodes=args.warmup_batch_episodes,
     )
 
 

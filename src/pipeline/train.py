@@ -604,6 +604,9 @@ def train(
     oracle_warmup_episodes: int = 0,
     oracle_dataset_path: Optional[str] = None,
     oracle_time_limit: int = 20,
+    oracle_parallel_workers: int = 1,
+    oracle_solver_threads: Optional[int] = None,
+    oracle_warmup_batch_episodes: int = 1,
     auto_stages: bool = False,
     stage2_min_episodes: int = 200,
     stage2_success_threshold: float = 0.8,
@@ -699,6 +702,9 @@ def train(
             oracle_time_limit,
             device,
             oracle_dataset_path=oracle_dataset_path,
+            oracle_parallel_workers=oracle_parallel_workers,
+            oracle_solver_threads=oracle_solver_threads,
+            warmup_batch_episodes=oracle_warmup_batch_episodes,
         )
     elif oracle_warmup_episodes > 0 and start_episode > 0:
         print("已从断点恢复训练，跳过Oracle蒸馏预热。")
@@ -1171,6 +1177,24 @@ def train_main() -> None:
         help="可复用BC数据集文件路径（命中则优先使用，未命中回退在线Oracle）",
     )
     parser.add_argument(
+        "--oracle-parallel-workers",
+        type=int,
+        default=1,
+        help="在线Oracle并行求解worker数（<=1表示串行）",
+    )
+    parser.add_argument(
+        "--oracle-solver-threads",
+        type=int,
+        default=None,
+        help="单个Oracle求解器线程数",
+    )
+    parser.add_argument(
+        "--oracle-warmup-batch-episodes",
+        type=int,
+        default=1,
+        help="Oracle预热按多少个episode累计一次反向传播（>1可提升GPU利用率）",
+    )
+    parser.add_argument(
         "--auto-stages",
         action="store_true",
         help="启用Stage2/Stage3自动化编排（Stage1仍手动分离）",
@@ -1256,6 +1280,9 @@ def train_main() -> None:
         oracle_warmup_episodes=args.oracle_warmup_episodes,
         oracle_dataset_path=args.oracle_dataset_path,
         oracle_time_limit=args.oracle_time_limit,
+        oracle_parallel_workers=args.oracle_parallel_workers,
+        oracle_solver_threads=args.oracle_solver_threads,
+        oracle_warmup_batch_episodes=args.oracle_warmup_batch_episodes,
         auto_stages=args.auto_stages,
         stage2_min_episodes=args.stage2_min_episodes,
         stage2_success_threshold=args.stage2_success_threshold,

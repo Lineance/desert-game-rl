@@ -3,7 +3,12 @@ import pytest
 
 from src.env.config import Level3Config, Weather
 from src.pipeline.benchmark import _build_oracle_detailed, _summarize_oracle_detailed
-from src.utils.oracle import solve_theoretical_optimal, solve_theoretical_plan
+from src.utils.oracle import (
+    OracleSolverConfig,
+    solve_theoretical_batch,
+    solve_theoretical_optimal,
+    solve_theoretical_plan,
+)
 
 
 def test_oracle_rejects_wrong_weather_length():
@@ -78,6 +83,29 @@ def test_oracle_invalid_level_raises():
         solve_theoretical_optimal(99, [Weather.SUNNY] * Level3Config.NUM_DAYS, time_limit=1)
 
 
+def test_oracle_solver_config_cbc_path():
+    weather_seq = [Weather.SUNNY] * Level3Config.NUM_DAYS
+    cfg = OracleSolverConfig(time_limit=2, solver_preference="cbc", threads=1)
+    result = solve_theoretical_optimal(3, weather_seq, solver_config=cfg)
+    assert result["status"] in {"Optimal", "Not Solved", "Undefined", "Infeasible"}
+    assert "objective" in result
+
+
+def test_oracle_batch_matches_single():
+    weather_seq = [Weather.SUNNY] * Level3Config.NUM_DAYS
+    single = solve_theoretical_optimal(3, weather_seq, time_limit=2)
+    batch = solve_theoretical_batch(
+        level=3,
+        weather_seqs=[weather_seq],
+        time_limit=2,
+        max_workers=2,
+    )
+    assert len(batch) == 1
+    assert batch[0]["status"] == single["status"]
+    if single["is_proven_optimal"]:
+        assert batch[0]["objective"] == pytest.approx(single["objective"])
+
+
 def test_evaluate_oracle_upper_bound_with_monkeypatch(monkeypatch):
     import src.pipeline.benchmark as benchmark
 
@@ -117,6 +145,62 @@ def test_build_oracle_detailed_with_empty_oracle(monkeypatch):
     record = detailed["no_sandstorm"][0]
     assert record["status"] == "Unknown"
     assert record["objective"] == 0.0
+
+
+def test_build_oracle_detailed_parallel_batch(monkeypatch):
+    import src.pipeline.benchmark as benchmark
+
+    def fake_batch(
+        level,
+        weather_seqs,
+        time_limit=30,
+        return_plan=False,
+        max_workers=None,
+        config_cls=None,
+        base_consumption=None,
+        solver_config=None,
+        solver_options=None,
+        threads=None,
+    ):
+        _ = (
+            level,
+            time_limit,
+            return_plan,
+            max_workers,
+            config_cls,
+            base_consumption,
+            solver_config,
+            solver_options,
+            threads,
+        )
+        return [
+            {
+                "status": "Optimal",
+                "objective": 1111.0,
+                "reached": True,
+                "final_money": 1000.0,
+                "final_water": 0.0,
+                "final_food": 0.0,
+                "reach_day": 3,
+                "length": 3,
+                "return": 111.0,
+            }
+            for _ in weather_seqs
+        ]
+
+    monkeypatch.setattr(benchmark, "solve_theoretical_batch", fake_batch)
+
+    detailed = benchmark._build_oracle_detailed(
+        level=3,
+        runs=2,
+        weather_modes=["no_sandstorm"],
+        oracle_time_limit=1,
+        oracle_parallel_workers=2,
+        oracle_solver_threads=1,
+    )
+
+    assert len(detailed["no_sandstorm"]) == 2
+    assert all(r["status"] == "Optimal" for r in detailed["no_sandstorm"])
 
 
 def test_build_oracle_detailed_oracle_exception(monkeypatch):

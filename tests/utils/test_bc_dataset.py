@@ -77,3 +77,66 @@ def test_generate_bc_dataset_filters_unsolved(tmp_path, monkeypatch):
     assert summary["episodes"] == 4
     assert summary["records"] < summary["episodes"]
     assert all(item.get("status") == "Optimal" for item in payload["records"])
+
+
+def test_generate_bc_dataset_parallel_batch(tmp_path, monkeypatch):
+    monkeypatch.setattr(bc_dataset, "_make_env", lambda **kwargs: _DummyEnv())
+
+    called = {"batch": 0}
+    received = {"progress_every": None, "progress_prefix": None}
+
+    def _fake_batch(
+        level,
+        weather_seqs,
+        time_limit=20,
+        return_plan=False,
+        max_workers=None,
+        config_cls=None,
+        base_consumption=None,
+        solver_config=None,
+        solver_options=None,
+        threads=None,
+        progress_every=0,
+        progress_prefix="Oracle batch",
+    ):
+        _ = (
+            level,
+            time_limit,
+            return_plan,
+            max_workers,
+            config_cls,
+            base_consumption,
+            solver_config,
+            solver_options,
+            threads,
+        )
+        called["batch"] += 1
+        received["progress_every"] = progress_every
+        received["progress_prefix"] = progress_prefix
+        return [
+            {
+                "status": "Optimal",
+                "reached": True,
+                "plan": [{"move": 0, "mine": False, "buy_water": 0, "buy_food": 0}],
+            }
+            for _ in weather_seqs
+        ]
+
+    monkeypatch.setattr(bc_dataset, "_solve_theoretical_batch", _fake_batch)
+
+    output_path = tmp_path / "bc_parallel.json"
+    summary = bc_dataset.generate_behavior_cloning_dataset(
+        level=3,
+        episodes=3,
+        output_path=str(output_path),
+        oracle_parallel_workers=2,
+        oracle_solver_threads=1,
+        show_progress=True,
+        progress_interval=2,
+    )
+
+    assert called["batch"] == 1
+    assert received["progress_every"] == 2
+    assert received["progress_prefix"] == "BC Oracle"
+    assert summary["records"] == 3
+    assert output_path.exists()

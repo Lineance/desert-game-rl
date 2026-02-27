@@ -29,6 +29,20 @@ train3:
 train4:
     uv run python scripts/train.py --level 4 --episodes 5000
 
+# 第四关加速训练（推荐，复用离线BC数据集）
+train4-fast:
+    $env:OMP_NUM_THREADS="1"
+    $env:MKL_NUM_THREADS="1"
+    $env:OPENBLAS_NUM_THREADS="1"
+    uv run python scripts/train.py --level 4 --device cuda --episodes 5000 --log-interval 200 --eval-interval 400 --eval-episodes 10 --path-entropy-episodes 20 --checkpoint-interval 500 --oracle-dataset-path artifacts/results/level4_bc_dataset.json --oracle-warmup-episodes 300 --oracle-parallel-workers 10 --oracle-solver-threads 1 --oracle-warmup-batch-episodes 4 --auto-stages
+
+# 第四关加速训练（可调版本）
+train4-tuned episodes="5000" warmup="300" workers="10" warmup_batch="4":
+    $env:OMP_NUM_THREADS="1"
+    $env:MKL_NUM_THREADS="1"
+    $env:OPENBLAS_NUM_THREADS="1"
+    uv run python scripts/train.py --level 4 --device cuda --episodes {{episodes}} --log-interval 200 --eval-interval 400 --eval-episodes 10 --path-entropy-episodes 20 --checkpoint-interval 500 --oracle-dataset-path artifacts/results/level4_bc_dataset.json --oracle-warmup-episodes {{warmup}} --oracle-parallel-workers {{workers}} --oracle-solver-threads 1 --oracle-warmup-batch-episodes {{warmup_batch}} --auto-stages
+
 board:
     uv run tensorboard --logdir artifacts/logs/tensorboard --port 6006
 

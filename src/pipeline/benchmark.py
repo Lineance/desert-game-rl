@@ -24,7 +24,7 @@ import torch
 from src.env.config import Level3Config, Level4Config, Level35Config
 from src.env.environment import make_env
 from src.pipeline.evaluate import load_agent_for_eval, run_episodes
-from src.utils.oracle import solve_theoretical_optimal
+from src.utils.oracle import solve_theoretical_batch, solve_theoretical_optimal
 
 
 def evaluate_model(
@@ -167,6 +167,18 @@ def benchmark_main() -> None:
     parser.add_argument(
         "--oracle-time-limit", type=int, default=30, help="Oracle单次求解时限（秒）"
     )
+    parser.add_argument(
+        "--oracle-parallel-workers",
+        type=int,
+        default=1,
+        help="Oracle并行求解worker数（<=1表示串行）",
+    )
+    parser.add_argument(
+        "--oracle-solver-threads",
+        type=int,
+        default=None,
+        help="单个Oracle求解器线程数（传给HiGHS/CBC）",
+    )
 
     parser.add_argument("--output-json", type=str, default=None, help="保存结果到 JSON")
     parser.add_argument(
@@ -240,6 +252,8 @@ def benchmark_main() -> None:
             runs=args.runs,
             weather_modes=weather_modes,
             oracle_time_limit=args.oracle_time_limit,
+            oracle_parallel_workers=args.oracle_parallel_workers,
+            oracle_solver_threads=args.oracle_solver_threads,
         )
 
         oracle_summary = _summarize_oracle_detailed(oracle_detailed, level=args.level)
@@ -454,12 +468,16 @@ def _build_oracle_detailed(
     runs: int,
     weather_modes: List[str],
     oracle_time_limit: int,
+    oracle_parallel_workers: int = 1,
+    oracle_solver_threads: Optional[int] = None,
 ) -> Dict[str, List[Dict[str, Any]]]:
 
     detailed: Dict[str, List[Dict[str, Any]]] = {mode: [] for mode in weather_modes}
 
     for mode in weather_modes:
         env = make_env(level=level, weather_mode=mode, seed=None)
+        seeds: List[int] = []
+        weather_seqs: List[List[int]] = []
         for seed in range(runs):
             env.reset(seed=seed)
 
@@ -467,9 +485,39 @@ def _build_oracle_detailed(
                 continue
 
             weather_seq = list(env.state.weather_future)
+            seeds.append(seed)
+            weather_seqs.append(weather_seq)
 
-            oracle = solve_theoretical_optimal(level, weather_seq, time_limit=oracle_time_limit)
+        if oracle_parallel_workers is not None and oracle_parallel_workers > 1:
+            oracle_results = solve_theoretical_batch(
+                level=level,
+                weather_seqs=weather_seqs,
+                time_limit=oracle_time_limit,
+                max_workers=oracle_parallel_workers,
+                threads=oracle_solver_threads,
+            )
+        else:
+            if oracle_solver_threads is None:
+                oracle_results = [
+                    solve_theoretical_optimal(
+                        level,
+                        weather_seq,
+                        time_limit=oracle_time_limit,
+                    )
+                    for weather_seq in weather_seqs
+                ]
+            else:
+                oracle_results = [
+                    solve_theoretical_optimal(
+                        level,
+                        weather_seq,
+                        time_limit=oracle_time_limit,
+                        threads=oracle_solver_threads,
+                    )
+                    for weather_seq in weather_seqs
+                ]
 
+        for seed, oracle in zip(seeds, oracle_results):
             detailed[mode].append(
                 {
                     "seed": seed,

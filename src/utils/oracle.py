@@ -7,6 +7,8 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
 from typing import Any, Dict, List, Mapping, Sequence, Tuple
 
 import pulp
@@ -21,23 +23,88 @@ from src.env.config import (
 )
 
 
+@dataclass(frozen=True)
+class OracleSolverConfig:
+    time_limit: int = 60
+    msg: bool = False
+    solver_preference: str = "auto"  # auto | highs | cbc
+    mip_rel_gap: float = 1e-4
+    mip_abs_gap: float = 0.1
+    random_seed: int | None = None
+    threads: int | None = None
+    solver_options: Sequence[str] | None = None
+
+
+def _resolve_config(level: int | None, config_cls):
+    if config_cls is not None:
+        return config_cls
+    if level is None:
+        raise ValueError("必须提供 level 或 config_cls")
+    return _pick_config(level)
+
+
+def _build_solver(config: OracleSolverConfig):
+    options = (
+        list(config.solver_options)
+        if config.solver_options is not None
+        else [
+            "--mip_rel_gap",
+            str(config.mip_rel_gap),
+            "--mip_abs_gap",
+            str(config.mip_abs_gap),
+        ]
+    )
+    if config.random_seed is not None:
+        options.extend(["--random_seed", str(config.random_seed)])
+    if config.threads is not None:
+        options.extend(["--threads", str(config.threads)])
+
+    preference = config.solver_preference.lower()
+    if preference not in {"auto", "highs", "cbc"}:
+        raise ValueError(f"Unsupported solver_preference: {config.solver_preference}")
+
+    if preference in {"auto", "highs"}:
+        try:
+            return pulp.HiGHS(
+                msg=config.msg,
+                timeLimit=config.time_limit,
+                options=options,
+            )
+        except Exception:
+            if preference == "highs":
+                raise
+
+    cbc_kwargs: Dict[str, Any] = {"msg": config.msg, "timeLimit": config.time_limit}
+    if config.threads is not None:
+        cbc_kwargs["threads"] = int(config.threads)
+    try:
+        return pulp.PULP_CBC_CMD(**cbc_kwargs)
+    except TypeError:
+        cbc_kwargs.pop("threads", None)
+        return pulp.PULP_CBC_CMD(**cbc_kwargs)
+
+
 def solve_theoretical_optimal(
     level: int,
     weather_seq: Sequence[int],
     time_limit: int = 60,
+    *,
+    config_cls=None,
+    base_consumption: Mapping[int, Tuple[int, int]] | None = None,
+    solver_config: OracleSolverConfig | None = None,
+    solver_options: Sequence[str] | None = None,
+    threads: int | None = None,
 ) -> Dict[str, float]:
     """求解已知天气下的理论最优。"""
-    config_cls = _pick_config(level)
-    prob, v = _build_model(config_cls, weather_seq)
+    config_cls = _resolve_config(level=level, config_cls=config_cls)
+    prob, v = _build_model(config_cls, weather_seq, base_consumption=base_consumption)
 
-    try:
-        solver = pulp.HiGHS(
-            msg=False,
-            timeLimit=time_limit,
-            options=["--mip_rel_gap", "0.0001", "--mip_abs_gap", "0.1"],
-        )
-    except Exception:
-        solver = pulp.PULP_CBC_CMD(msg=False, timeLimit=time_limit)
+    cfg = solver_config or OracleSolverConfig(
+        time_limit=time_limit,
+        solver_options=solver_options,
+        threads=threads,
+    )
+    solver = _build_solver(cfg)
 
     prob.solve(solver)
     result = _solve_problem(prob, v, config_cls, want_plan=False)
@@ -61,19 +128,23 @@ def solve_theoretical_plan(
     level: int,
     weather_seq: Sequence[int],
     time_limit: int = 60,
+    *,
+    config_cls=None,
+    base_consumption: Mapping[int, Tuple[int, int]] | None = None,
+    solver_config: OracleSolverConfig | None = None,
+    solver_options: Sequence[str] | None = None,
+    threads: int | None = None,
 ) -> Dict[str, Any]:
     """求解已知天气下的理论最优并返回动作方案。"""
-    config_cls = _pick_config(level)
-    prob, v = _build_model(config_cls, weather_seq)
+    config_cls = _resolve_config(level=level, config_cls=config_cls)
+    prob, v = _build_model(config_cls, weather_seq, base_consumption=base_consumption)
 
-    try:
-        solver = pulp.HiGHS(
-            msg=False,
-            timeLimit=time_limit,
-            options=["--mip_rel_gap", "0.0001", "--mip_abs_gap", "0.1"],
-        )
-    except Exception:
-        solver = pulp.PULP_CBC_CMD(msg=False, timeLimit=time_limit)
+    cfg = solver_config or OracleSolverConfig(
+        time_limit=time_limit,
+        solver_options=solver_options,
+        threads=threads,
+    )
+    solver = _build_solver(cfg)
 
     prob.solve(solver)
     result = _solve_problem(prob, v, config_cls, want_plan=True)
@@ -93,38 +164,90 @@ def solve_theoretical_optimal_with_config(
     base_consumption: Mapping[int, Tuple[int, int]] | None = None,
     time_limit: int = 60,
     solver_options: Sequence[str] | None = None,
+    solver_config: OracleSolverConfig | None = None,
+    threads: int | None = None,
 ) -> Dict[str, float]:
     """求解自定义配置的理论最优（用于扩展关卡测试）。"""
-    prob, v = _build_model(config_cls, weather_seq, base_consumption=base_consumption)
+    return solve_theoretical_optimal(
+        level=0,
+        weather_seq=weather_seq,
+        time_limit=time_limit,
+        config_cls=config_cls,
+        base_consumption=base_consumption,
+        solver_config=solver_config,
+        solver_options=solver_options,
+        threads=threads,
+    )
 
-    if solver_options is None:
-        solver_options = ["--mip_rel_gap", "0.0001", "--mip_abs_gap", "0.1"]
 
-    try:
-        solver = pulp.HiGHS(
-            msg=False,
-            timeLimit=time_limit,
-            options=list(solver_options),
+def solve_theoretical_batch(
+    level: int,
+    weather_seqs: Sequence[Sequence[int]],
+    time_limit: int = 60,
+    *,
+    return_plan: bool = False,
+    max_workers: int | None = None,
+    config_cls=None,
+    base_consumption: Mapping[int, Tuple[int, int]] | None = None,
+    solver_config: OracleSolverConfig | None = None,
+    solver_options: Sequence[str] | None = None,
+    threads: int | None = None,
+    progress_every: int = 0,
+    progress_prefix: str = "Oracle batch",
+) -> List[Dict[str, Any]]:
+    """并行求解多条天气序列。"""
+
+    total = len(weather_seqs)
+
+    def _print_progress(done: int) -> None:
+        if progress_every <= 0 or total <= 0:
+            return
+        if done % progress_every == 0 or done == total:
+            print(f"{progress_prefix}: {done}/{total} completed")
+
+    if max_workers is None or max_workers <= 1:
+        solve_one = solve_theoretical_plan if return_plan else solve_theoretical_optimal
+        results: List[Dict[str, Any]] = []
+        for idx, seq in enumerate(weather_seqs, start=1):
+            results.append(
+                solve_one(
+                    level=level,
+                    weather_seq=seq,
+                    time_limit=time_limit,
+                    config_cls=config_cls,
+                    base_consumption=base_consumption,
+                    solver_config=solver_config,
+                    solver_options=solver_options,
+                    threads=threads,
+                )
+            )
+            _print_progress(idx)
+        return results
+
+    solve_one = solve_theoretical_plan if return_plan else solve_theoretical_optimal
+
+    def _task(seq: Sequence[int]):
+        return solve_one(
+            level=level,
+            weather_seq=seq,
+            time_limit=time_limit,
+            config_cls=config_cls,
+            base_consumption=base_consumption,
+            solver_config=solver_config,
+            solver_options=solver_options,
+            threads=threads,
         )
-    except Exception:
-        solver = pulp.PULP_CBC_CMD(msg=False, timeLimit=time_limit)
 
-    prob.solve(solver)
-    result = _solve_problem(prob, v, config_cls, want_plan=False)
-    objective = result["objective"]
-
-    return {
-        "status": result["status"],
-        "is_proven_optimal": result["is_proven_optimal"],
-        "objective": objective,
-        "reached": result["reached"],
-        "final_money": result["final_money"],
-        "final_water": result["final_water"],
-        "final_food": result["final_food"],
-        "reach_day": result["reach_day"],
-        "length": result["reach_day"],
-        "return": objective - config_cls.INIT_MONEY,
-    }
+    results: List[Dict[str, Any]] = [dict() for _ in range(total)]
+    done = 0
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_index = {executor.submit(_task, seq): idx for idx, seq in enumerate(weather_seqs)}
+        for future in as_completed(future_to_index):
+            idx = future_to_index[future]
+            results[idx] = future.result()
+            done += 1
+            _print_progress(done)
+    return results
 
 
 def _pick_config(level: int):
@@ -149,7 +272,14 @@ def _solve_problem(
 ) -> Dict[str, Any]:
     status_name = pulp.LpStatus.get(prob.status, "Unknown")
     proven_optimal = _is_proven_optimal(prob)
-    objective = float(pulp.value(prob.objective)) if proven_optimal else float("nan")
+    objective_raw = pulp.value(prob.objective)
+    objective = (
+        float(objective_raw)
+        if proven_optimal
+        and objective_raw is not None
+        and not isinstance(objective_raw, pulp.LpAffineExpression)
+        else float("nan")
+    )
 
     def _safe_value(var) -> float:
         value = pulp.value(var)

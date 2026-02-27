@@ -210,3 +210,62 @@ def test_warmup_skips_non_optimal_oracle_solution(monkeypatch):
     assert summary["solved"] == 0.0
     assert summary["avg_steps"] == 0.0
     assert summary["success_rate"] == 0.0
+
+
+def test_warmup_parallel_batch_prefetch(monkeypatch):
+    env = make_env(level=3, weather_mode="no_sandstorm", seed=0)
+    agent = create_agent(env, config=None, device="cpu")
+    trainer = PPOTrainer(agent, config=None, device="cpu")
+
+    called = {"batch": 0}
+
+    def _fake_batch(
+        level,
+        weather_seqs,
+        time_limit=20,
+        return_plan=False,
+        max_workers=None,
+        config_cls=None,
+        base_consumption=None,
+        solver_config=None,
+        solver_options=None,
+        threads=None,
+    ):
+        _ = (
+            level,
+            time_limit,
+            return_plan,
+            max_workers,
+            config_cls,
+            base_consumption,
+            solver_config,
+            solver_options,
+            threads,
+        )
+        called["batch"] += 1
+        return [
+            {
+                "status": "Optimal",
+                "reached": True,
+                "plan": [{"move": 0, "mine": False, "buy_water": 0, "buy_food": 0}],
+            }
+            for _ in weather_seqs
+        ]
+
+    monkeypatch.setattr("src.pipeline.pretrain.solve_theoretical_batch", _fake_batch)
+
+    summary = behavior_cloning_with_oracle(
+        agent,
+        trainer,
+        env,
+        level=3,
+        episodes=2,
+        time_limit=1,
+        device="cpu",
+        log_interval=1000,
+        oracle_parallel_workers=2,
+        oracle_solver_threads=1,
+    )
+
+    assert called["batch"] == 1
+    assert summary["episodes"] == 2.0

@@ -117,13 +117,19 @@ uv run python -m src.utils.bc_dataset \
   --level 3 \
   --episodes 500 \
   --oracle-time-limit 20 \
+  --oracle-parallel-workers 8 \
+  --oracle-solver-threads 1 \
   --seed-start 0 \
   --output artifacts/results/level3_bc_dataset.json
+
+uv run python -m src.utils.bc_dataset
 
 # 2) 预训练复用该数据集（命中即直接取plan，未命中自动回退在线Oracle）
 uv run python scripts/pretrain.py \
   --level 3 \
   --warmup-episodes 300 \
+  --oracle-parallel-workers 8 \
+  --oracle-solver-threads 1 \
   --oracle-dataset-path artifacts/results/level3_bc_dataset.json
 
 # 3) train warmup 同样支持复用
@@ -131,6 +137,8 @@ uv run python scripts/train.py \
   --level 3 \
   --episodes 3000 \
   --oracle-warmup-episodes 300 \
+  --oracle-parallel-workers 8 \
+  --oracle-solver-threads 1 \
   --oracle-dataset-path artifacts/results/level3_bc_dataset.json
 ```
 
@@ -208,7 +216,8 @@ uv run python scripts/benchmark.py ./artifacts/checkpoints/level3_best.pt --leve
 uv run python scripts/benchmark.py ./artifacts/checkpoints/level3_best.pt --level 3 --runs 100 --min-success-rate 0.3
 
 # 加入数学规划Oracle上界（建议runs先设小一些）
-uv run python scripts/benchmark.py ./artifacts/checkpoints/level3_best.pt --level 3 --runs 20 --with-oracle --oracle-time-limit 30
+uv run python scripts/benchmark.py ./artifacts/checkpoints/level3_best.pt --level 3 --runs 20 \
+  --with-oracle --oracle-time-limit 30 --oracle-parallel-workers 8 --oracle-solver-threads 1
 ```
 
 输出指标：
