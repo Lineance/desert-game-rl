@@ -50,6 +50,7 @@ class ValidationConfig:
 @dataclass
 class ParsedAction:
     kind: str  # stay/move/mine
+    mine_intensity: float
     buy_water: int
     buy_food: int
 
@@ -118,6 +119,7 @@ class RLResultValidator:
         parts = [p.strip() for p in action.split("+") if p.strip()]
         kind = "stay"
         mining = False
+        mine_intensity = 0.0
         buy_water = 0
         buy_food = 0
 
@@ -127,8 +129,13 @@ class RLResultValidator:
             elif part == "停留" or part == "出发准备":
                 if kind != "move":
                     kind = "stay"
-            elif part == "挖矿":
+            elif part.startswith("挖矿"):
                 mining = True
+                m_intensity = re.search(r"挖矿\(强度([0-9]+(?:\.[0-9]+)?)\)", part)
+                if m_intensity:
+                    mine_intensity = float(m_intensity.group(1))
+                else:
+                    mine_intensity = 1.0
             elif part.startswith("购买"):
                 m = re.search(r"购买\(水(\d+)食(\d+)\)", part)
                 if m:
@@ -137,7 +144,13 @@ class RLResultValidator:
 
         if mining:
             kind = "mine"
-        return ParsedAction(kind=kind, buy_water=buy_water, buy_food=buy_food)
+            mine_intensity = max(0.0, min(1.0, mine_intensity))
+        return ParsedAction(
+            kind=kind,
+            mine_intensity=mine_intensity,
+            buy_water=buy_water,
+            buy_food=buy_food,
+        )
 
     def _weather_to_id(self, day: int, weather: str) -> Optional[int]:
         if weather in WEATHER_NAME_TO_ID:
@@ -235,7 +248,11 @@ class RLResultValidator:
 
             # 资源消耗
             base_w, base_f = BASE_CONSUMPTION[weather_id]
-            factor = 3 if action.kind == "mine" else (2 if action.kind == "move" else 1)
+            factor = (
+                (1.0 + 2.0 * action.mine_intensity)
+                if action.kind == "mine"
+                else (2 if action.kind == "move" else 1)
+            )
             cons_w = base_w * factor
             cons_f = base_f * factor
 
@@ -244,7 +261,9 @@ class RLResultValidator:
 
             arrive_water = prev_water - cons_w
             arrive_food = prev_food - cons_f
-            arrive_money = prev_money + (self.cfg.mine_income if action.kind == "mine" else 0)
+            arrive_money = prev_money + (
+                self.cfg.mine_income * action.mine_intensity if action.kind == "mine" else 0
+            )
 
             # 默认：仅由行动文字中的购买量驱动
             buy_w = action.buy_water

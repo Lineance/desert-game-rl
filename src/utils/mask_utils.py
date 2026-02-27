@@ -45,6 +45,8 @@ def normalize_valid_actions(valid_actions: Dict | None) -> Dict:
         return {
             "valid_moves": [0],
             "can_mine": False,
+            "mine_intensity_min": 0.0,
+            "mine_intensity_max": 0.0,
             "can_buy": False,
             "max_buy_water": 0,
             "max_buy_food": 0,
@@ -52,6 +54,8 @@ def normalize_valid_actions(valid_actions: Dict | None) -> Dict:
     return {
         "valid_moves": list(valid_actions.get("valid_moves", [0])),
         "can_mine": bool(valid_actions.get("can_mine", False)),
+        "mine_intensity_min": float(valid_actions.get("mine_intensity_min", 0.0)),
+        "mine_intensity_max": float(valid_actions.get("mine_intensity_max", 0.0)),
         "can_buy": bool(valid_actions.get("can_buy", False)),
         "max_buy_water": int(valid_actions.get("max_buy_water", 0)),
         "max_buy_food": int(valid_actions.get("max_buy_food", 0)),

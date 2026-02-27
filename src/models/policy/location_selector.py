@@ -73,7 +73,7 @@ class LocationActionSelector(nn.Module):
 
         if location_type == "mine" and can_mine:
             mine = self.mine_generator.sample(ctx.state, can_mine=True)
-            mine_flag = (mine["mine_intensity"] > 0.5).long()
+            mine_flag = (mine["mine_intensity"] > 0.0).long()
             out.update({"mine": mine_flag, "mine_intensity": mine["mine_intensity"]})
             out["log_prob"] = out["log_prob"] + mine["log_prob"]
             out["entropy"] = out["entropy"] + mine["entropy"]
@@ -120,7 +120,10 @@ class LocationActionSelector(nn.Module):
             log_prob = log_prob + buy_eval["log_prob"]
             entropy = entropy + buy_eval["entropy"]
         elif location_type == "mine" and can_mine:
-            mine_eval = self.mine_generator.evaluate(ctx.state, actions["mine"], can_mine=True)
+            mine_intensity = actions.get("mine_intensity")
+            if mine_intensity is None:
+                mine_intensity = actions["mine"].float()
+            mine_eval = self.mine_generator.evaluate(ctx.state, mine_intensity, can_mine=True)
             log_prob = log_prob + mine_eval["log_prob"]
             entropy = entropy + mine_eval["entropy"]
         elif location_type == "start" and is_day0 and can_buy:

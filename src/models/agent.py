@@ -100,6 +100,7 @@ class ActorNetwork(nn.Module):
         action = {
             "move": target_position,
             "mine": bool(loc_sample["mine"].item() > 0),
+            "mine_intensity": float(loc_sample["mine_intensity"].item()),
             "buy_water": int(loc_sample["buy_water"].item()),
             "buy_food": int(loc_sample["buy_food"].item()),
         }
@@ -289,6 +290,7 @@ class Agent(nn.Module):
                 action = {
                     "move": move,
                     "mine": bool(loc_sample["mine"].item() > 0),
+                    "mine_intensity": float(loc_sample["mine_intensity"].item()),
                     "buy_water": int(loc_sample["buy_water"].item()),
                     "buy_food": int(loc_sample["buy_food"].item()),
                 }
@@ -310,6 +312,9 @@ class Agent(nn.Module):
                     action["buy_food"] = (
                         int(np.random.randint(1, max_buy_food + 1)) if max_buy_food > 0 else 0
                     )
+                if not valid.get("can_mine", False):
+                    action["mine"] = False
+                    action["mine_intensity"] = 0.0
 
             value = output["value"].item()
         return action, value

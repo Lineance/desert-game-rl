@@ -27,8 +27,8 @@ class State:
 
     day: int  # 当前天数（从0开始）
     position: int  # 当前位置 (0-based)
-    water: int  # 剩余水
-    food: int  # 剩余食物
+    water: float  # 剩余水
+    food: float  # 剩余食物
     money: float  # 剩余资金
     weather_today: int  # 今天天气
     weather_future: List[int]  # 未来天气
@@ -155,6 +155,8 @@ class DesertCrossingEnv:
     def _get_observation(self) -> np.ndarray:
         """构建观测向量"""
         s = self.state
+        if self.belief_model is None:
+            raise RuntimeError("Belief model is not initialized")
 
         state_features = np.array(
             [
@@ -221,7 +223,10 @@ class DesertCrossingEnv:
 
         # 解析动作
         move_target = action.get("move", s.position)
-        do_mine = action.get("mine", False)
+        raw_mine_intensity = action.get("mine_intensity", None)
+        if raw_mine_intensity is None:
+            raw_mine_intensity = 1.0 if action.get("mine", False) else 0.0
+        mine_intensity = float(np.clip(raw_mine_intensity, 0.0, 1.0))
         buy_water = action.get("buy_water", 0)
         buy_food = action.get("buy_food", 0)
 
@@ -262,6 +267,7 @@ class DesertCrossingEnv:
                 "move_to": s.position,
                 "move": s.position,
                 "mine": False,
+                "mine_intensity": 0.0,
                 "buy_water": executed_buy_water,
                 "buy_food": executed_buy_food,
                 "name": action_name,
@@ -298,19 +304,18 @@ class DesertCrossingEnv:
         just_arrived = is_moving  # 如果移动了，就是刚到达
         can_mine = s.position in self.config.MINES and not just_arrived
 
-        if do_mine and can_mine:
+        if mine_intensity > 0.0 and can_mine:
             mining = True
             action_name = "挖矿"
-        elif do_mine and not can_mine:
-            # 非法挖矿，忽略
-            do_mine = False
+        elif mine_intensity > 0.0 and not can_mine:
+            mine_intensity = 0.0
 
         # ========== 3. 计算资源消耗 ==========
         base_w, base_f = BASE_CONSUMPTION[s.weather_today]
 
         # 消耗因子：行走2倍，挖矿3倍，停留1倍
         if mining:
-            factor = 3
+            factor = 1.0 + 2.0 * mine_intensity
         elif is_moving:
             factor = 2
         else:
@@ -328,6 +333,7 @@ class DesertCrossingEnv:
                 "move_to": s.position,
                 "move": s.position,
                 "mine": mining,
+                "mine_intensity": float(mine_intensity) if mining else 0.0,
                 "buy_water": 0,
                 "buy_food": 0,
                 "name": action_name,
@@ -342,7 +348,7 @@ class DesertCrossingEnv:
 
         # 挖矿收益
         if mining:
-            s.money += self.config.MINE_INCOME
+            s.money += self.config.MINE_INCOME * float(mine_intensity)
             # reward += max(3.0, self.config.MINE_INCOME / 50.0)
             # if "挖矿" not in s.action_history:
             #     reward += 5.0
@@ -379,6 +385,7 @@ class DesertCrossingEnv:
             "move_to": s.position,
             "move": s.position,
             "mine": mining,
+            "mine_intensity": float(mine_intensity) if mining else 0.0,
             "buy_water": executed_buy_water,
             "buy_food": executed_buy_food,
             "name": action_name,
@@ -517,6 +524,8 @@ class DesertCrossingEnv:
         return {
             "valid_moves": valid_moves,
             "can_mine": can_mine,
+            "mine_intensity_min": 0.0,
+            "mine_intensity_max": 1.0 if can_mine else 0.0,
             "can_buy": can_buy,
             "max_buy_water": max_buy_water,
             "max_buy_food": max_buy_food,

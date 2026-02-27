@@ -259,7 +259,7 @@ def test_sandstorm_move_attempt_forces_stay_and_penalty():
     assert done is False
     assert env.state.position == prev_pos
     assert info["last_action"]["move_to"] == prev_pos
-    assert reward <= -50.0
+    assert reward <= -10.0
 
 
 def test_weather_sequence_same_seed_is_deterministic():

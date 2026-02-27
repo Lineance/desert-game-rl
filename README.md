@@ -45,6 +45,7 @@ task2/
 │   └── utils/
 │       ├── graph_utils.py    # 图静态特征与最短路
 │       ├── mask_utils.py     # 动作掩码与地点类型辅助
+│       ├── bc_dataset.py     # Behavior Cloning数据集生成/加载
 │       └── training_utils.py # GAE/梯度裁剪/动态alpha
 │
 └── README.md
@@ -105,6 +106,33 @@ uv run python scripts/pretrain.py --level 3 --warmup-episodes 300
 ```
 
 默认输出：`artifacts/checkpoints/level{n}_pretrained.pt`
+
+### 离线生成并复用 BC 数据（推荐）
+
+当你希望减少重复求解 Oracle（尤其 warmup 多次重跑）时，可以先离线生成数据集，再在 pretrain/train 中复用。
+
+```bash
+# 1) 先离线生成BC数据集（一次生成，多次复用）
+uv run python -m src.utils.bc_dataset \
+  --level 3 \
+  --episodes 500 \
+  --oracle-time-limit 20 \
+  --seed-start 0 \
+  --output artifacts/results/level3_bc_dataset.json
+
+# 2) 预训练复用该数据集（命中即直接取plan，未命中自动回退在线Oracle）
+uv run python scripts/pretrain.py \
+  --level 3 \
+  --warmup-episodes 300 \
+  --oracle-dataset-path artifacts/results/level3_bc_dataset.json
+
+# 3) train warmup 同样支持复用
+uv run python scripts/train.py \
+  --level 3 \
+  --episodes 3000 \
+  --oracle-warmup-episodes 300 \
+  --oracle-dataset-path artifacts/results/level3_bc_dataset.json
+```
 
 ### 命令
 

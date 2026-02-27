@@ -5,6 +5,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, TextIO
 
+import numpy as np
 import torch
 import torch.nn.functional as F
 
@@ -20,6 +21,7 @@ from src.env.config import (
 from src.env.environment import make_env
 from src.models.agent import Agent, create_agent
 from src.models.ppo import PPOTrainer
+from src.utils.bc_dataset import load_behavior_cloning_dataset_index
 from src.utils.oracle import solve_theoretical_plan
 
 
@@ -115,6 +117,7 @@ def behavior_cloning_with_oracle(
     start_episode: int = 0,
     metrics: Optional[List[Dict[str, float]]] = None,
     on_episode_end: Optional[Callable[[int, Dict[str, float]], None]] = None,
+    oracle_dataset_path: Optional[str] = None,
 ) -> Dict[str, float]:
     if episodes <= 0:
         return {
@@ -148,6 +151,11 @@ def behavior_cloning_with_oracle(
     student_total_buy_food = 0
     student_success = 0
     student_eval_episodes = 0
+    dataset_index = (
+        load_behavior_cloning_dataset_index(oracle_dataset_path)
+        if oracle_dataset_path is not None
+        else None
+    )
 
     weather_mode = str(getattr(env, "weather_mode", "balanced"))
 
@@ -196,17 +204,34 @@ def behavior_cloning_with_oracle(
                 episode_record["student_success"] = float("nan")
 
         weather_seq = list(env.state.weather_future)
-        oracle = solve_theoretical_plan(level, weather_seq, time_limit=time_limit)
-        oracle_status = str(oracle.get("status", "Unknown"))
-        oracle_reached = bool(oracle.get("reached", False))
-        plan = oracle.get("plan", [])
+        oracle_status = "Unknown"
+        oracle_reached = False
+        plan = []
+
+        used_dataset = False
+        if dataset_index is not None:
+            dataset_record = dataset_index.get(ep)
+            if isinstance(dataset_record, dict):
+                dataset_weather = dataset_record.get("weather_seq", [])
+                if list(dataset_weather) == weather_seq:
+                    oracle_status = str(dataset_record.get("status", "Unknown"))
+                    oracle_reached = bool(dataset_record.get("reached", False))
+                    plan = dataset_record.get("plan", [])
+                    used_dataset = True
+
+        if not used_dataset:
+            oracle = solve_theoretical_plan(level, weather_seq, time_limit=time_limit)
+            oracle_status = str(oracle.get("status", "Unknown"))
+            oracle_reached = bool(oracle.get("reached", False))
+            plan = oracle.get("plan", [])
+
         oracle_exact_solved = oracle_status.lower() == "optimal" and oracle_reached and bool(plan)
         if not oracle_exact_solved:
             if ep % log_interval == 0:
                 print(
                     "Oracle预热: "
                     f"episode={ep}, status={oracle_status}, reached={oracle_reached}, "
-                    f"plan_len={len(plan)}, 非精确解，跳过"
+                    f"plan_len={len(plan)}, source={'dataset' if used_dataset else 'oracle'}, 非精确解，跳过"
                 )
             if on_episode_end is not None:
                 on_episode_end(ep, dict(episode_record))
@@ -258,6 +283,7 @@ def behavior_cloning_with_oracle(
             action_tensor = {
                 "move": torch.LongTensor([action["move"]]).to(device),
                 "mine": torch.FloatTensor([action["mine"]]).to(device),
+                "mine_intensity": torch.FloatTensor([action.get("mine_intensity", 0.0)]).to(device),
                 "buy_water": torch.FloatTensor([action["buy_water"]]).to(device),
                 "buy_food": torch.FloatTensor([action["buy_food"]]).to(device),
             }
@@ -455,6 +481,7 @@ def pretrain_behavior_cloning(
     output_path: Optional[str] = None,
     save_interval: int = 0,
     resume: Optional[str] = None,
+    oracle_dataset_path: Optional[str] = None,
 ) -> None:
     """仅执行Oracle蒸馏预热并保存模型。"""
     if device is None:
@@ -501,6 +528,8 @@ def pretrain_behavior_cloning(
     )
     if resume_path is not None:
         print(f"resume_from={resume_path}, start_episode={resume_start_episode}")
+    if oracle_dataset_path:
+        print(f"oracle_dataset={oracle_dataset_path}")
     print("=" * 60)
 
     csv_file, csv_writer, tb_writer, csv_path, tb_dir = _init_pretrain_loggers(level)
@@ -539,6 +568,7 @@ def pretrain_behavior_cloning(
             start_episode=resume_start_episode,
             metrics=warmup_metrics,
             on_episode_end=_save_interval_checkpoint,
+            oracle_dataset_path=oracle_dataset_path,
         )
 
         _write_pretrain_metrics(csv_writer, tb_writer, warmup_metrics, summary)
@@ -618,6 +648,12 @@ def pretrain_main() -> None:
         default=None,
         help="从已有模型断点继续预训练（可传文件路径或latest）",
     )
+    parser.add_argument(
+        "--oracle-dataset-path",
+        type=str,
+        default=None,
+        help="可复用BC数据集文件路径（命中则优先使用，未命中回退在线Oracle）",
+    )
     args = parser.parse_args()
 
     pretrain_behavior_cloning(
@@ -629,6 +665,7 @@ def pretrain_main() -> None:
         output_path=args.output,
         save_interval=args.save_interval,
         resume=args.resume,
+        oracle_dataset_path=args.oracle_dataset_path,
     )
 
 
@@ -639,7 +676,11 @@ def _sanitize_oracle_action(action: Dict[str, Any], env, valid_actions: Dict[str
         move = int(env.state.position)
 
     can_mine = bool(valid_actions.get("can_mine", False)) if valid_actions else False
-    mine = bool(action.get("mine", False)) and can_mine
+    raw_mine_intensity = action.get("mine_intensity", None)
+    if raw_mine_intensity is None:
+        raw_mine_intensity = 1.0 if bool(action.get("mine", False)) else 0.0
+    mine_intensity = float(np.clip(raw_mine_intensity, 0.0, 1.0)) if can_mine else 0.0
+    mine = mine_intensity > 0.0
 
     if valid_actions and bool(valid_actions.get("can_buy", False)):
         max_w = int(valid_actions.get("max_buy_water", 0))
@@ -653,6 +694,7 @@ def _sanitize_oracle_action(action: Dict[str, Any], env, valid_actions: Dict[str
     return {
         "move": move,
         "mine": mine,
+        "mine_intensity": mine_intensity,
         "buy_water": buy_water,
         "buy_food": buy_food,
     }

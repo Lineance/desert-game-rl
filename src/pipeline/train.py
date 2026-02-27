@@ -424,6 +424,11 @@ def _weather_sensitivity_test(
     return bool(
         int(action_hot.get("move", -1)) != int(action_storm.get("move", -1))
         or bool(action_hot.get("mine", False)) != bool(action_storm.get("mine", False))
+        or abs(
+            float(action_hot.get("mine_intensity", 0.0))
+            - float(action_storm.get("mine_intensity", 0.0))
+        )
+        > 1e-6
     )
 
 
@@ -597,6 +602,7 @@ def train(
     output_dir: Optional[str] = None,
     weather_mode: Optional[str] = None,
     oracle_warmup_episodes: int = 0,
+    oracle_dataset_path: Optional[str] = None,
     oracle_time_limit: int = 20,
     auto_stages: bool = False,
     stage2_min_episodes: int = 200,
@@ -692,6 +698,7 @@ def train(
             oracle_warmup_episodes,
             oracle_time_limit,
             device,
+            oracle_dataset_path=oracle_dataset_path,
         )
     elif oracle_warmup_episodes > 0 and start_episode > 0:
         print("已从断点恢复训练，跳过Oracle蒸馏预热。")
@@ -1158,6 +1165,12 @@ def train_main() -> None:
         help="Oracle求解时间上限（秒）",
     )
     parser.add_argument(
+        "--oracle-dataset-path",
+        type=str,
+        default=None,
+        help="可复用BC数据集文件路径（命中则优先使用，未命中回退在线Oracle）",
+    )
+    parser.add_argument(
         "--auto-stages",
         action="store_true",
         help="启用Stage2/Stage3自动化编排（Stage1仍手动分离）",
@@ -1241,6 +1254,7 @@ def train_main() -> None:
         output_dir=args.output_dir,
         weather_mode=args.weather_mode,
         oracle_warmup_episodes=args.oracle_warmup_episodes,
+        oracle_dataset_path=args.oracle_dataset_path,
         oracle_time_limit=args.oracle_time_limit,
         auto_stages=args.auto_stages,
         stage2_min_episodes=args.stage2_min_episodes,

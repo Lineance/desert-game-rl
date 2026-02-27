@@ -277,7 +277,11 @@ def _format_action(action: Dict, position: int) -> str:
 
     # 挖矿
     if action.get("mine", False):
-        parts.append("挖矿")
+        if "mine_intensity" in action:
+            intensity = float(action.get("mine_intensity", 1.0))
+            parts.append(f"挖矿(强度{intensity:.2f})")
+        else:
+            parts.append("挖矿")
 
     # 购买
     buy_water = action.get("buy_water", 0)

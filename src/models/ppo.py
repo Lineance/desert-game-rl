@@ -47,6 +47,7 @@ class RolloutBuffer:
         self.hidden_states: List[Optional[Tuple]] = []
         self.valid_actions_list: List[Optional[Dict]] = []  # 存储valid_actions
         self.episode_reached: bool = False
+        self.episode_final_money_ratio: float = 0.0
 
     def add(
         self,
@@ -79,6 +80,8 @@ class RolloutBuffer:
         self.dones.clear()
         self.hidden_states.clear()
         self.valid_actions_list.clear()
+        self.episode_reached = False
+        self.episode_final_money_ratio = 0.0
 
     def compute_returns_and_advantages(
         self, last_value: float, gamma: float = 0.99, gae_lambda: float = 0.95
@@ -200,7 +203,15 @@ class PPOTrainer:
         # 准备动作张量
         actions = {
             "move": torch.LongTensor([a["move"] for a in rollout_buffer.actions]).to(self.device),
-            "mine": torch.FloatTensor([a["mine"] for a in rollout_buffer.actions]).to(self.device),
+            "mine": torch.FloatTensor(
+                [float(bool(a.get("mine", False))) for a in rollout_buffer.actions]
+            ).to(self.device),
+            "mine_intensity": torch.FloatTensor(
+                [
+                    float(a.get("mine_intensity", 1.0 if a.get("mine", False) else 0.0))
+                    for a in rollout_buffer.actions
+                ]
+            ).to(self.device),
             "buy_water": torch.FloatTensor([a["buy_water"] for a in rollout_buffer.actions]).to(
                 self.device
             ),
@@ -306,13 +317,12 @@ class PPOTrainer:
                 reduction="none",
             )
 
-            # Fund Critic 损失（PPO 风格 value clipping）
-            value_pred_clipped = old_values + torch.clamp(
-                new_fund_values - old_values, -self.config.CLIP_EPS, self.config.CLIP_EPS
+            # Fund Critic 损失（最终资金监督，按初始资金归一化）
+            fund_target = torch.full_like(
+                new_fund_values,
+                float(rollout_buffer.episode_final_money_ratio),
             )
-            fund_value_loss1 = (new_fund_values - returns_tensor).pow(2)
-            fund_value_loss2 = (value_pred_clipped - returns_tensor).pow(2)
-            fund_value_loss_element = torch.max(fund_value_loss1, fund_value_loss2)
+            fund_value_loss_element = (new_fund_values - fund_target).pow(2)
 
             weighted_value_loss_element = (
                 alpha * survival_value_loss_element + (1.0 - alpha) * fund_value_loss_element
@@ -422,6 +432,7 @@ class PPOTrainer:
             if can_mine and epsilon > 0.0 and np.random.random() < min(0.6, epsilon + 0.2):
                 action["move"] = int(env.state.position)
                 action["mine"] = True
+                action["mine_intensity"] = 1.0
                 action["buy_water"] = 0
                 action["buy_food"] = 0
 
@@ -466,7 +477,19 @@ class PPOTrainer:
                     day_norm_i,
                     {
                         "move": torch.LongTensor([action_idx["move"]]).to(self.device),
-                        "mine": torch.FloatTensor([action_idx["mine"]]).to(self.device),
+                        "mine": torch.FloatTensor([float(bool(action_idx.get("mine", False)))]).to(
+                            self.device
+                        ),
+                        "mine_intensity": torch.FloatTensor(
+                            [
+                                float(
+                                    action_idx.get(
+                                        "mine_intensity",
+                                        1.0 if action_idx.get("mine", False) else 0.0,
+                                    )
+                                )
+                            ]
+                        ).to(self.device),
                         "buy_water": torch.FloatTensor([action_idx["buy_water"]]).to(self.device),
                         "buy_food": torch.FloatTensor([action_idx["buy_food"]]).to(self.device),
                     },
@@ -519,5 +542,8 @@ class PPOTrainer:
         }
 
         buffer.episode_reached = bool(episode_info["reached"])
+        buffer.episode_final_money_ratio = float(episode_info["final_money"]) / float(
+            max(1.0, float(env.config.INIT_MONEY))
+        )
 
         return buffer, last_value, episode_info
